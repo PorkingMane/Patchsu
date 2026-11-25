@@ -1,0 +1,5 @@
+Patchsu-CLI
+Patchsu-CLI.exe
+dist/
+internal/bundle/patches/*
+!internal/bundle/patches/README.md

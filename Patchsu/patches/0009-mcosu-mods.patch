@@ -1,0 +1,2974 @@
+Patchsu patch 9 (optional): McOsu mods ported to lazer (osu! ruleset): Mafham and Click Control.
+
+Needs 0001 only. Also applies on top of 0001–0008 and together with 0010–0013 (in glob order).
+
+Mod select shows a "from McOsu" plaque on both mods (the "M" circle of patch 3's "from Modosu" plaque, green text).
+
+Mafham (MH, Fun): "Maybe infinity IS finite after all?" McOsu's approach rate of negative infinity.
+  Every object except spinners is on screen at once, without approach circles, follow points or the "not hittable yet" dim
+  (McOsu turns that off too: it would show what comes next). Gameplay doesn't change: hit windows, stacking and autoplay stay
+  as they are (only the reading part of star rating and PP is dropped, see below). Like McOsu, the whole map appears together 3 s (real time) before the first object, after
+  another 3 s of lead-in in which it's drawn invisibly. When an object becomes playable, its picture is swapped for its
+  drawable in the same frame; both look the same. Circles, slider ends and repeats don't flash in kiai sections (pictures can't).
+  A retry of the same map (same mods, skin and window) reuses the first play's pictures: the map appears 1 s after the retry
+  instead of 3 s. Song select and the mod select footer show AR as −∞ (green, a reduction); this is display only.
+  Below 100% far objects brightness, the brightness is written as a small exponent after it (−∞^.5 at 50%); it rolls
+  from one value to the next like the value itself.
+  Setting "Far objects brightness" (100% – 10%) darkens the objects that aren't within the normal approach rate yet, so the next
+  ones stand out (each brightens over 200 ms when it gets there). While watching a replay (or autoplay), clicking its icon
+  switches it off: the far objects fade to 10%, and each fades in over 200 ms when it becomes playable. Own toggle, no 0007
+  needed (0007's replay toggles don't include it). Reading doesn't count with Mafham: no reading in its star rating or PP.
+  Incompatible with mods that animate, move or rotate objects or need approach circles (Hidden, Traceable, Approach Different,
+  Freeze Frame, Transform, Wiggle, Spin In, Grow/Deflate, Magnetised, Repel, Depth, Barrel Roll).
+
+Click Control (CC, Difficulty Increase). McOsu's "Jigsaw 1": a click that doesn't judge anything counts as a miss.
+  Like McOsu: it breaks combo, lowers accuracy and health, counts as a miss (also for Sudden Death / Perfect), and there's
+  no limit, so a play can have more misses than objects. The map's max combo stays the same, the miss isn't on hit error
+  meters, and a red miss shows at the cursor (plus the combo break sound). Clicks don't count before the first object has
+  ended, after the last one, in breaks, in gaps over 5 s, as a spinner's first click, or when resuming from pause. Clicking
+  a locked circle (notelock shake) or outside every hit window counts. Replays recreate the misses; rewinding takes them back.
+  Incompatible with Relax, Alternate and Single Tap.
+
+How it works:
+- Click Control: osu.Game.Rulesets.Osu/Mods/OsuModClickControl.cs. A component first in line for key presses notes each
+  press; one updated right after input checks whether the press produced any judgement and, if not, applies a Miss for a
+  ClickControlMiss object (empty hit windows) to the score and health processors. Its judgement is an ExtraJudgement
+  (osu.Game/Rulesets/Judgements/ExtraJudgement.cs): JudgementProcessor doesn't count those towards JudgedHits (so the map
+  still completes), and ScoreProcessor doesn't make it the "previous object" of the next hit event.
+- Mafham: osu.Game.Rulesets.Osu/Mods/OsuModMafham.cs. The preempt is lengthened on the gameplay copy of the beatmap only,
+  after the lead-in and autoplay were worked out; the playfield's drawables keep their normal lifetimes. Everything further
+  ahead is drawn by MafhamLayer: pages of objects drawn once into cached frame buffers from frozen copies (drawable hit
+  objects on a stopped clock). The front page holds 16 objects, later ones double up to 64 and are split when they come to
+  the front, so taking an object out redraws a few objects at most. Only the first two pages keep their copies; the others
+  keep just the picture (a slider body alone holds ~1 MB of renderer buffers) and get copies back in the background before
+  they're needed. Copies are drawn into a page with correct coverage (alpha "over", not o!f's summed alpha), so a page holds
+  premultiplied colours; it's drawn as such, with its draw colour premultiplied too (a fading page, e.g. the player fading out
+  on exit or restart, fades like live objects instead of being added on top, white). Pages aren't redrawn while scaled
+  (player open/close and fail animations stretch them), and are redrawn once the window size settles. A page is placed on
+  whole screen pixels when it's drawn: a frame buffer is its drawable's screen size rounded up, drawn back with nearest
+  filtering, so on fractional pixels the picture shifted by up to a pixel and lost a row/column (looked compressed). The layer stays
+  invisible until every page is drawn, then fades in at once. A picture is taken out in the frame its drawable comes alive.
+  A 3-minute map with ~960 objects plays with the same draw calls / frame times as without the mod (every object live
+  instead: ~6400 draw calls, 14 fps).
+- Kept pictures: once every page is drawn, each page's picture is copied into a Snapshot (a cached frame buffer drawn once from
+  a BufferedContainerView of the page, then taken out of the draw tree; its frame buffer lives until it's disposed). The last
+  map's snapshots stay in a static PictureCache (keyed by beatmap, object positions, mods, skin and beatmap skin/colour settings,
+  checked against each page's screen rectangle). A retry's pages draw a view of their snapshot (one quad each); only the first
+  two pages load copies, for when objects are taken out. Old snapshots are disposed once another map's are kept and no play
+  uses them. Costs about as much GPU memory as the pages themselves while kept.
+- IApplicableToGameplayStartTime (osu.Game/Rulesets/Mods): lets a mod lengthen the lead-in (DrawableOsuRuleset uses it).
+- −∞ display: OsuRuleset.GetAdjustedDisplayDifficulty (display only, never used for calculations) returns negative infinity for
+  AR with Mafham; the approach time reads "∞ ms". VerticalAttributeDisplay doesn't roll to or from an infinite value (it would
+  show NaN), and the mod select footer, song select / results statistics and the two tooltips write "−∞" (.NET writes "-Infinity").
+  The brightness exponent is RulesetBeatmapAttribute.ValueExponent (set on AR by OsuRuleset.GetBeatmapAttributesForDisplay),
+  drawn by VerticalAttributeDisplay and BeatmapTitleWedge.StatisticDifficulty with AttributeExponentCounter (osu.Game/Overlays/Mods:
+  a RollingCounter, 250 ms like the value; invariant culture, no leading zero; hidden at 1 / none).
+- Replay toggle: OsuModMafham.ReplayToggle (added to the HUD in replays) looks for Mafham's ModIcons twice a second and keeps
+  invisible click areas over them; a click switches the pictures' opacity and refreshes the live drawables' state.
+- Reading: OsuDifficultyCalculator sets the reading difficulty to 0 with Mafham (after its note count, so PP's miss penalty is
+  unchanged); the star rating and PP's reading value both come from it.
+- Slider-heavy maps: page sizes are counted in cost (a slider costs 3 circles), copies get their costly first update a few per
+  frame (3 ms budget) before their page is drawn, and copies are disposed on o!f's background disposal thread (disposing a
+  page of slider copies on the update thread took up to 200 ms).
+- DrawableOsuHitObject.DimUntilHittable (Mafham turns it off).
+- Plaque: mods marked IMcOsuMod (osu.Game/Rulesets/Mods) get McOsuModPlaque (osu.Game/Overlays/Mods), added by ModPanel's
+  constructor (0003/0004 add theirs in load / LoadComplete). Its own copy of the icon, so it doesn't need 0003.
+- Leak fix: a non-pooled drawable hit object's SyntheticHitObjectEntry stops following its hit object when the drawable is
+  disposed (HitObjectLifetimeEntry.StopFollowingHitObject); before, the hit object kept every such drawable alive.
+
+diff --git a/osu.Game.Rulesets.Osu/Difficulty/OsuDifficultyCalculator.cs b/osu.Game.Rulesets.Osu/Difficulty/OsuDifficultyCalculator.cs
+index c0d2124a3b..0712114f86 100644
+--- a/osu.Game.Rulesets.Osu/Difficulty/OsuDifficultyCalculator.cs
++++ b/osu.Game.Rulesets.Osu/Difficulty/OsuDifficultyCalculator.cs
+@@ -48,6 +48,11 @@ protected override DifficultyAttributes CreateDifficultyAttributes(IBeatmap beat
+             double speedDifficultStrainCount = speed.CountTopWeightedObjectDifficulties(speedDifficultyValue);
+             double readingDifficultNoteCount = reading.CountTopWeightedObjectDifficulties(readingDifficultyValue);
+ 
++            // Patchsu (patch 9): with Mafham (every object on screen at once) reading doesn't count, neither in the star rating nor in PP
++            // (PP's reading value comes from this difficulty). The note count stays, so PP's miss penalty is worked out as usual.
++            if (mods.Any(m => m is OsuModMafham))
++                readingDifficultyValue = 0;
++
+             double speedNotes = speed.RelevantObjectCount();
+ 
+             double aimNoSlidersTopWeightedSliderCount = aimWithoutSliders.CountTopWeightedSliders(aimNoSlidersDifficultyValue);
+diff --git a/osu.Game.Rulesets.Osu/Mods/OsuModClickControl.cs b/osu.Game.Rulesets.Osu/Mods/OsuModClickControl.cs
+new file mode 100644
+index 0000000000..ddadc50f7c
+--- /dev/null
++++ b/osu.Game.Rulesets.Osu/Mods/OsuModClickControl.cs
+@@ -0,0 +1,376 @@
++// Added by Patchsu
++
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using osu.Framework.Allocation;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Containers;
++using osu.Framework.Input.Bindings;
++using osu.Framework.Input.Events;
++using osu.Framework.Localisation;
++using osu.Framework.Testing;
++using osu.Game.Audio;
++using osu.Game.Beatmaps.Timing;
++using osu.Game.Rulesets.Judgements;
++using osu.Game.Rulesets.Mods;
++using osu.Game.Rulesets.Objects;
++using osu.Game.Rulesets.Objects.Drawables;
++using osu.Game.Rulesets.Objects.Legacy;
++using osu.Game.Rulesets.Osu.Objects;
++using osu.Game.Rulesets.Osu.Objects.Drawables;
++using osu.Game.Rulesets.Osu.UI;
++using osu.Game.Rulesets.Scoring;
++using osu.Game.Rulesets.UI;
++using osu.Game.Scoring;
++using osu.Game.Screens.Play;
++using osu.Game.Skinning;
++using osuTK;
++
++namespace osu.Game.Rulesets.Osu.Mods
++{
++    /// <summary>
++    /// Patchsu patch 9: McOsu's "Jigsaw 1". A click (key or mouse button press) that doesn't judge any object counts as a miss.
++    /// </summary>
++    /// <remarks>
++    /// Like in McOsu, such a miss breaks combo, lowers accuracy and health, counts in the miss statistic and can fail the play
++    /// (Sudden Death / Perfect too). There's no limit, so a play can have more misses than the map has objects. The map's maximum
++    /// combo doesn't change, and the miss isn't shown on hit error meters.
++    /// A click doesn't count:
++    /// - when it judges something (a circle or slider head, including a miss from clicking it too early),
++    /// - the first time it's pressed while a spinner is on screen (McOsu lets a spinner take one click),
++    /// - before the first object has ended, after the last one has ended, during breaks and in other long gaps
++    ///   (more than 5 seconds until the next object, as in McOsu),
++    /// - when it's the click that resumed gameplay after a pause.
++    /// A click on a circle that's locked (notelock shake) or outside every hit window counts, same as McOsu.
++    /// Replays recreate the misses from the recorded clicks, and rewinding a replay takes them back.
++    /// </remarks>
++    public partial class OsuModClickControl : Mod, IApplicableToDrawableRuleset<OsuHitObject>, IApplicableToScoreProcessor, IApplicableToHealthProcessor, IMcOsuMod
++    {
++        /// <summary>
++        /// A gap without objects that is longer than this doesn't count clicks (McOsu's osu_skip_time).
++        /// </summary>
++        public const double SKIPPABLE_GAP = 5000;
++
++        public override string Name => "Click Control";
++        public override string Acronym => "CC";
++        public override LocalisableString Description => "Unnecessary clicks count as misses.";
++        public override ModType Type => ModType.DifficultyIncrease;
++
++        public override Type[] IncompatibleMods => new[] { typeof(OsuModRelax), typeof(InputBlockingMod) };
++
++        private ScoreProcessor? scoreProcessor;
++        private HealthProcessor? healthProcessor;
++
++        public void ApplyToScoreProcessor(ScoreProcessor scoreProcessor) => this.scoreProcessor = scoreProcessor;
++
++        public ScoreRank AdjustRank(ScoreRank rank, double accuracy) => rank;
++
++        public void ApplyToHealthProcessor(HealthProcessor healthProcessor) => this.healthProcessor = healthProcessor;
++
++        public void ApplyToDrawableRuleset(DrawableRuleset<OsuHitObject> drawableRuleset)
++        {
++            var osuRuleset = (DrawableOsuRuleset)drawableRuleset;
++            var tracker = new ClickTracker(this, osuRuleset);
++
++            // The tracker is first in line for key binding presses, so it sees every press before hit objects handle it.
++            // The fence is updated first after input was handled, i.e. after a frame's presses were judged and before hit objects update.
++            osuRuleset.KeyBindingInputManager.Add(tracker);
++            osuRuleset.KeyBindingInputManager.Add(new Fence(tracker));
++        }
++
++        /// <summary>
++        /// Gives the play an extra miss. Returns false when no score/health processor is attached (e.g. outside a player).
++        /// </summary>
++        private bool applyResult(JudgementResult result)
++        {
++            if (scoreProcessor == null || healthProcessor == null)
++                return false;
++
++            // Same order as Player: health first, so the score knows whether the play had failed.
++            healthProcessor.ApplyResult(result);
++            scoreProcessor.ApplyResult(result);
++            return true;
++        }
++
++        private void revertResult(JudgementResult result)
++        {
++            healthProcessor?.RevertResult(result);
++            scoreProcessor?.RevertResult(result);
++        }
++
++        /// <summary>
++        /// The object an extra miss belongs to. It's not part of the beatmap and isn't drawn.
++        /// </summary>
++        public class ClickControlMiss : OsuHitObject
++        {
++            public ClickControlMiss(double time, Vector2 position)
++            {
++                StartTime = time;
++                Position = position;
++                // Keeps the miss off hit error meters and timing statistics.
++                HitWindows = HitWindows.Empty;
++            }
++
++            public override Judgement CreateJudgement() => new ExtraJudgement();
++
++            protected override HitWindows CreateHitWindows() => HitWindows.Empty;
++        }
++
++        private partial class Fence : Component
++        {
++            private readonly ClickTracker tracker;
++
++            public Fence(ClickTracker tracker)
++            {
++                this.tracker = tracker;
++                Depth = float.MaxValue;
++            }
++
++            protected override void Update()
++            {
++                base.Update();
++                tracker.ProcessPresses();
++            }
++        }
++
++        private partial class ClickTracker : CompositeDrawable, IKeyBindingHandler<OsuAction>
++        {
++            private readonly OsuModClickControl mod;
++            private readonly DrawableOsuRuleset drawableRuleset;
++
++            private readonly double firstObjectEndTime = double.MaxValue;
++            private readonly double lastObjectEndTime = double.MinValue;
++
++            /// <summary>
++            /// Start times of the top-level objects, sorted (for the "long gap" check).
++            /// </summary>
++            private readonly double[] startTimes;
++
++            /// <summary>
++            /// The latest end time among the objects up to each index of <see cref="startTimes"/>.
++            /// </summary>
++            private readonly double[] endTimesSoFar;
++
++            private readonly Spinner[] spinners;
++            private readonly BreakPeriod[] breaks;
++
++            private readonly List<Press> pendingPresses = new List<Press>();
++            private Press? dispatchingPress;
++
++            private readonly Stack<JudgementResult> appliedMisses = new Stack<JudgementResult>();
++            private readonly Stack<(double Time, Spinner Spinner)> spinnerClicks = new Stack<(double, Spinner)>();
++            private readonly HashSet<Spinner> clickedSpinners = new HashSet<Spinner>();
++
++            private OsuResumeOverlay.OsuResumeOverlayInputBlocker? resumeInputBlocker;
++
++            private JudgementContainer<DrawableOsuJudgement> judgementLayer = null!;
++            private JudgementPooler<DrawableOsuJudgement> judgementPooler = null!;
++            private Container missArea = null!;
++            private PausableSkinnableSound missSound = null!;
++
++            [Resolved(CanBeNull = true)]
++            private GameplayState? gameplayState { get; set; }
++
++            public ClickTracker(OsuModClickControl mod, DrawableOsuRuleset drawableRuleset)
++            {
++                this.mod = mod;
++                this.drawableRuleset = drawableRuleset;
++
++                RelativeSizeAxes = Axes.Both;
++                Depth = float.MinValue;
++
++                var objects = drawableRuleset.Beatmap.HitObjects.OrderBy(h => h.StartTime).ToArray();
++
++                startTimes = new double[objects.Length];
++                endTimesSoFar = new double[objects.Length];
++
++                double latestEnd = double.MinValue;
++
++                for (int i = 0; i < objects.Length; i++)
++                {
++                    startTimes[i] = objects[i].StartTime;
++                    latestEnd = Math.Max(latestEnd, objects[i].GetEndTime());
++                    endTimesSoFar[i] = latestEnd;
++                }
++
++                if (objects.Length > 0)
++                {
++                    firstObjectEndTime = objects[0].GetEndTime();
++                    lastObjectEndTime = latestEnd;
++                }
++
++                spinners = objects.OfType<Spinner>().ToArray();
++                breaks = drawableRuleset.Beatmap.Breaks.ToArray();
++            }
++
++            [BackgroundDependencyLoader]
++            private void load()
++            {
++                InternalChildren = new Drawable[]
++                {
++                    judgementPooler = new JudgementPooler<DrawableOsuJudgement>(new[] { HitResult.Miss }),
++                    drawableRuleset.CreatePlayfieldAdjustmentContainer().WithChild(missArea = new Container
++                    {
++                        RelativeSizeAxes = Axes.Both,
++                        Child = judgementLayer = new JudgementContainer<DrawableOsuJudgement> { RelativeSizeAxes = Axes.Both },
++                    }),
++                    missSound = new PausableSkinnableSound(new SampleInfo("Gameplay/combobreak")),
++                };
++            }
++
++            protected override void LoadComplete()
++            {
++                base.LoadComplete();
++
++                drawableRuleset.Playfield.NewResult += onNewResult;
++                resumeInputBlocker = drawableRuleset.Playfield.ChildrenOfType<OsuResumeOverlay.OsuResumeOverlayInputBlocker>().FirstOrDefault();
++            }
++
++            public bool OnPressed(KeyBindingPressEvent<OsuAction> e)
++            {
++                if (e.Action != OsuAction.LeftButton && e.Action != OsuAction.RightButton)
++                    return false;
++
++                // A press that's only part of seeking backwards in a replay.
++                if (Time.Elapsed < 0)
++                    return false;
++
++                // The click that resumed gameplay; the playfield's input blocker swallows it.
++                if (resumeInputBlocker?.BlockNextPress == true)
++                    return false;
++
++                dispatchingPress = new Press(Time.Current, e.ScreenSpaceMousePosition);
++                pendingPresses.Add(dispatchingPress);
++                return false;
++            }
++
++            public void OnReleased(KeyBindingReleaseEvent<OsuAction> e)
++            {
++            }
++
++            private void onNewResult(DrawableHitObject judgedObject, JudgementResult result)
++            {
++                // Results that come while a press is being handled are that press's. (Objects judged by time come
++                // later in the frame, from their own update, when there's no press being handled anymore.)
++                if (dispatchingPress != null)
++                    dispatchingPress.Judged = true;
++            }
++
++            /// <summary>
++            /// Called once per (frame-stable) frame, after the frame's presses were handled and before hit objects update.
++            /// </summary>
++            public void ProcessPresses()
++            {
++                dispatchingPress = null;
++
++                while (appliedMisses.TryPeek(out var miss) && miss.TimeAbsolute > Time.Current)
++                    mod.revertResult(appliedMisses.Pop());
++
++                while (spinnerClicks.TryPeek(out var click) && click.Time > Time.Current)
++                    clickedSpinners.Remove(spinnerClicks.Pop().Spinner);
++
++                foreach (var press in pendingPresses)
++                {
++                    if (press.Judged || !countsAt(press.Time) || takenBySpinner(press.Time))
++                        continue;
++
++                    addMiss(press);
++                }
++
++                pendingPresses.Clear();
++            }
++
++            private bool countsAt(double time)
++            {
++                if (time < firstObjectEndTime || time > lastObjectEndTime)
++                    return false;
++
++                foreach (var b in breaks)
++                {
++                    if (b.Contains(time))
++                        return false;
++                }
++
++                // Long gaps (McOsu's skippable sections): more than SKIPPABLE_GAP until the next object, after the previous one ended.
++                int next = Array.BinarySearch(startTimes, time);
++                next = next < 0 ? ~next : next + 1;
++
++                if (next < startTimes.Length && next > 0)
++                {
++                    if (startTimes[next] - time > SKIPPABLE_GAP && time > endTimesSoFar[next - 1])
++                        return false;
++                }
++
++                return true;
++            }
++
++            private bool takenBySpinner(double time)
++            {
++                foreach (var spinner in spinners)
++                {
++                    if (spinner.StartTime - spinner.TimePreempt > time)
++                        break;
++
++                    if (time > spinner.EndTime || clickedSpinners.Contains(spinner))
++                        continue;
++
++                    clickedSpinners.Add(spinner);
++                    spinnerClicks.Push((time, spinner));
++                    return true;
++                }
++
++                return false;
++            }
++
++            private void addMiss(Press press)
++            {
++                Vector2 position = missArea.ToLocalSpace(press.ScreenSpacePosition);
++                var result = new JudgementResult(new ClickControlMiss(press.Time, position), new ExtraJudgement()) { Type = HitResult.Miss };
++
++                int comboBefore = mod.scoreProcessor?.Combo.Value ?? 0;
++
++                if (!mod.applyResult(result))
++                    return;
++
++                appliedMisses.Push(result);
++                gameplayState?.ApplyResult(result);
++
++                // McOsu always plays the miss sound for these; the HUD only plays it when a combo above 20 breaks.
++                if (comboBefore <= 20)
++                    missSound.Play();
++
++                if (!drawableRuleset.Playfield.DisplayJudgements.Value)
++                    return;
++
++                var judgement = judgementPooler.Get(HitResult.Miss, j => j.Apply(result, null));
++
++                if (judgement == null)
++                    return;
++
++                judgement.Position = position;
++                judgement.Scale = new Vector2(LegacyRulesetExtensions.CalculateScaleFromCircleSize(drawableRuleset.Beatmap.Difficulty.CircleSize, true));
++                judgementLayer.Add(judgement);
++            }
++
++            protected override void Dispose(bool isDisposing)
++            {
++                base.Dispose(isDisposing);
++                drawableRuleset.Playfield.NewResult -= onNewResult;
++            }
++
++            private class Press
++            {
++                public readonly double Time;
++                public readonly Vector2 ScreenSpacePosition;
++                public bool Judged;
++
++                public Press(double time, Vector2 screenSpacePosition)
++                {
++                    Time = time;
++                    ScreenSpacePosition = screenSpacePosition;
++                }
++            }
++        }
++    }
++}
+diff --git a/osu.Game.Rulesets.Osu/Mods/OsuModMafham.cs b/osu.Game.Rulesets.Osu/Mods/OsuModMafham.cs
+new file mode 100644
+index 0000000000..3e5f43ee37
+--- /dev/null
++++ b/osu.Game.Rulesets.Osu/Mods/OsuModMafham.cs
+@@ -0,0 +1,1892 @@
++// Added by Patchsu
++
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Threading;
++using Newtonsoft.Json;
++using osu.Framework.Allocation;
++using osu.Framework.Bindables;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Colour;
++using osu.Framework.Graphics.Containers;
++using osu.Framework.Graphics.Primitives;
++using osu.Framework.Graphics.Rendering;
++using osu.Framework.Graphics.Rendering.Dummy;
++using osu.Framework.Graphics.Sprites;
++using osu.Framework.Input.Events;
++using osu.Framework.Localisation;
++using osu.Framework.Testing;
++using osu.Framework.Timing;
++using osu.Game.Beatmaps;
++using osu.Game.Configuration;
++using osu.Game.Online.API;
++using osu.Game.Overlays.Settings;
++using osu.Game.Rulesets.Mods;
++using osu.Game.Rulesets.Objects;
++using osu.Game.Rulesets.Objects.Drawables;
++using osu.Game.Rulesets.Osu.Objects;
++using osu.Game.Rulesets.Osu.Objects.Drawables;
++using osu.Game.Rulesets.Osu.Skinning.Default;
++using osu.Game.Rulesets.Osu.UI;
++using osu.Game.Rulesets.UI;
++using osu.Game.Screens.Play;
++using osu.Game.Skinning;
++using osu.Game.Utils;
++using osuTK;
++using osuTK.Graphics;
++
++namespace osu.Game.Rulesets.Osu.Mods
++{
++    /// <summary>
++    /// Patchsu patch 9: McOsu's "Mafham". Approach rate is set to negative infinity: every object (except spinners) is on screen
++    /// from the moment the first one appears, without approach circles, follow points or the "not hittable yet" dim.
++    /// </summary>
++    /// <remarks>
++    /// Only what is seen changes. Hit windows, stacking, star rating, PP and the autoplay replay stay as they are: the longer preempt
++    /// is set on the gameplay copy of the beatmap only, after the autoplay replay was made, and the playfield's drawable hit objects
++    /// still come alive at the normal approach rate. Like McOsu, the map appears a few seconds before the first object
++    /// (<see cref="VIEW_TIME"/>), and the lead-in is longer still (<see cref="PREPARE_TIME"/>) to draw the map before it appears.
++    ///
++    /// Keeping a thousand live drawable hit objects on screen costs thousands of draw calls and about a megabyte of renderer memory
++    /// per slider. Like McOsu, objects that aren't close yet are drawn into cached frame buffers instead (<see cref="MafhamLayer"/>),
++    /// so a frame only draws a few textured quads for them, and most of the time only the pictures are kept in memory.
++    /// When an object's drawable comes alive, its picture is taken out in the same frame. The picture looks the same as the drawable,
++    /// so nothing changes on screen.
++    ///
++    /// The pictures of a map's first drawing are kept (<see cref="PictureCache"/>), so a retry only needs <see cref="RETRY_PREPARE_TIME"/>
++    /// before the map appears.
++    /// </remarks>
++    public partial class OsuModMafham : Mod, IApplicableToDrawableRuleset<OsuHitObject>, IApplicableToDrawableHitObject, IHidesApproachCircles,
++                                        IApplicableToGameplayStartTime, IApplicableToPlayer, IApplicableToHUD, IMcOsuMod
++    {
++        /// <summary>
++        /// How long (at least, in real time) the map is on screen before the first object needs to be hit.
++        /// </summary>
++        public const double VIEW_TIME = 3000;
++
++        /// <summary>
++        /// How long (in real time) gameplay runs before the map appears, so it's drawn by then.
++        /// </summary>
++        public const double PREPARE_TIME = 3000;
++
++        /// <summary>
++        /// How long (in real time) gameplay runs before the map appears when its pictures are kept from an earlier play of the same map
++        /// (a retry): enough for the player's opening animation, after which the kept pictures are put on screen in one frame.
++        /// </summary>
++        public const double RETRY_PREPARE_TIME = 1000;
++
++        /// <summary>
++        /// How long the map takes to fade in when it appears (like a hit object's fade-in).
++        /// </summary>
++        public const double FADE_IN_DURATION = 400;
++
++        /// <summary>
++        /// How long an object takes to brighten when its drawable comes alive (see <see cref="FarObjectBrightness"/>).
++        /// </summary>
++        public const double BRIGHTEN_DURATION = 200;
++
++        /// <summary>
++        /// How visible the not yet playable objects are while Mafham is switched off in a replay (by clicking its icon).
++        /// </summary>
++        public const float REPLAY_OFF_OPACITY = 0.1f;
++
++        public override string Name => "Mafham";
++        public override string Acronym => "MH";
++        public override LocalisableString Description => "Maybe infinity IS finite after all?";
++        public override ModType Type => ModType.Fun;
++
++        [SettingSource("Far objects brightness", "How bright objects are until they come within the normal approach rate. Lower makes the next objects stand out.",
++            SettingControlType = typeof(SettingsPercentageSlider<float>))]
++        public BindableFloat FarObjectBrightness { get; } = new BindableFloat(1)
++        {
++            MinValue = 0.1f,
++            MaxValue = 1,
++            Precision = 0.05f,
++        };
++
++        /// <summary>
++        /// The play's layer (null until the drawable ruleset is made).
++        /// </summary>
++        private MafhamLayer? layer;
++
++        /// <summary>
++        /// The gameplay start time worked out for a playable beatmap (it's asked for more than once, and the answer must not change
++        /// when the pictures get kept during the play).
++        /// </summary>
++        private (IBeatmap Beatmap, double Time)? gameplayStartTime;
++
++        /// <summary>
++        /// Mods that animate objects over time, move them, depend on the approach circles or the preempt time, or turn the playfield.
++        /// The pictures can't follow any of that.
++        /// </summary>
++        public override Type[] IncompatibleMods => new[]
++        {
++            typeof(IRequiresApproachCircles),
++            typeof(OsuModHidden),
++            typeof(OsuModFreezeFrame),
++            typeof(OsuModTransform),
++            typeof(OsuModWiggle),
++            typeof(OsuModSpinIn),
++            typeof(OsuModObjectScaleTween),
++            typeof(OsuModMagnetised),
++            typeof(OsuModRepel),
++            typeof(OsuModDepth),
++            typeof(OsuModBarrelRoll),
++        };
++
++        public double ApplyToGameplayStartTime(double gameplayStartTime, IBeatmap beatmap, IReadOnlyList<Mod> mods)
++        {
++            if (this.gameplayStartTime is var (memoBeatmap, memoTime) && memoBeatmap == beatmap)
++                return Math.Min(gameplayStartTime, memoTime);
++
++            var objects = beatmap.HitObjects.OfType<OsuHitObject>().Where(h => h is not Spinner).OrderBy(h => h.StartTime).ToList();
++
++            if (objects.Count == 0)
++                return gameplayStartTime;
++
++            double rate = ModUtils.CalculateRateWithMods(mods);
++            double prepareTime = PictureCache.HasPlay(GetPlayKey(beatmap, objects, mods)) ? RETRY_PREPARE_TIME : PREPARE_TIME;
++            double time = GetAppearTime(objects, rate) - prepareTime * rate;
++
++            this.gameplayStartTime = (beatmap, time);
++            return Math.Min(gameplayStartTime, time);
++        }
++
++        /// <summary>
++        /// Identifies a play's objects as drawn: the beatmap, where its objects are, and the mods (except this one's settings, which
++        /// don't change the pictures).
++        /// </summary>
++        public static string GetPlayKey(IBeatmap beatmap, IReadOnlyList<OsuHitObject> objects, IEnumerable<Mod> mods)
++        {
++            var hash = new HashCode();
++
++            foreach (var h in objects)
++            {
++                hash.Add(h.StartTime);
++                hash.Add(h.StackedPosition);
++                hash.Add(h.Scale);
++                hash.Add(h.ComboIndexWithOffsets);
++            }
++
++            string modsKey = string.Join(",", mods.Where(m => m is not OsuModMafham).OrderBy(m => m.Acronym).Select(m => JsonConvert.SerializeObject(new APIMod(m))));
++
++            return $"{beatmap.BeatmapInfo.MD5Hash}|{objects.Count}|{hash.ToHashCode()}|{modsKey}";
++        }
++
++        /// <summary>
++        /// Forgets the kept pictures (tests).
++        /// </summary>
++        public static void ClearPictureCache() => PictureCache.Clear();
++
++        /// <summary>
++        /// Whether the play is a replay (or autoplay), where Mafham's icon switches it.
++        /// </summary>
++        private bool isReplay;
++
++        /// <summary>
++        /// Whether Mafham is switched on (it can be switched off while watching a replay).
++        /// </summary>
++        public bool EffectsEnabled { get; private set; } = true;
++
++        public void ApplyToPlayer(Player player) => isReplay = player is ReplayPlayer;
++
++        public void ApplyToHUD(HUDOverlay overlay)
++        {
++            if (isReplay)
++                overlay.Add(new ReplayToggle(this, overlay));
++        }
++
++        /// <summary>
++        /// Switches Mafham on or off while watching a replay. Off, the objects that aren't playable yet fade to
++        /// <see cref="REPLAY_OFF_OPACITY"/>, so the replay looks like it has the normal approach rate (without approach circles); each
++        /// object fades in when it becomes playable. Only what is seen changes.
++        /// </summary>
++        public void SetEffectsEnabled(bool enabled)
++        {
++            if (EffectsEnabled == enabled)
++                return;
++
++            EffectsEnabled = enabled;
++            layer?.SetPictureOpacity(enabled ? 1 : REPLAY_OFF_OPACITY);
++            layer?.RefreshLiveObjects();
++        }
++
++        /// <summary>
++        /// When every object appears: <see cref="VIEW_TIME"/> before the first object, or at its normal approach start if that's earlier.
++        /// </summary>
++        /// <param name="objects">The objects (no spinners).</param>
++        /// <param name="rate">The play's rate (so the times are real time).</param>
++        /// <remarks>Unchanged by <see cref="ApplyPreempt"/> with this time.</remarks>
++        public static double GetAppearTime(IReadOnlyList<OsuHitObject> objects, double rate)
++            => Math.Min(objects.Min(h => h.StartTime - h.TimePreempt), objects.Min(h => h.StartTime) - VIEW_TIME * rate);
++
++        public void ApplyToDrawableRuleset(DrawableRuleset<OsuHitObject> drawableRuleset)
++        {
++            var osuRuleset = (DrawableOsuRuleset)drawableRuleset;
++
++            osuRuleset.Playfield.FollowPoints.Hide();
++            osuRuleset.KeyBindingInputManager.Add(layer = new MafhamLayer(this, osuRuleset));
++        }
++
++        public void ApplyToDrawableHitObject(DrawableHitObject drawable)
++        {
++            if (drawable is DrawableOsuHitObject osuDrawable)
++                osuDrawable.DimUntilHittable = false;
++
++            drawable.ApplyCustomUpdateState += (d, state) =>
++            {
++                if (d is DrawableHitCircle circle)
++                {
++                    circle.ApproachCircle.ClearTransforms();
++                    circle.ApproachCircle.Alpha = 0;
++                }
++
++                // A slider's parts (head, tail, repeats) each get their own call.
++                if (d is not DrawableSlider && d is not DrawableSpinner)
++                    disableKiaiFlash(d);
++
++                // Brightens (and fades in, while switched off in a replay) from the pictures' look when it comes alive. (Frozen copies
++                // come alive when the map appears, so they're at full brightness when drawn; the layer darkens and fades the pictures.)
++                float brightness = FarObjectBrightness.Value;
++                float opacity = EffectsEnabled ? 1 : REPLAY_OFF_OPACITY;
++
++                if (state == ArmedState.Idle && (brightness < 1 || opacity < 1) && FrozenObject.CanCopy(d))
++                {
++                    using (d.BeginAbsoluteSequence(d.LifetimeStart))
++                        d.FadeColour(new Color4(brightness, brightness, brightness, opacity)).FadeColour(Color4.White, BRIGHTEN_DURATION);
++                }
++            };
++        }
++
++        /// <summary>
++        /// Turns off the flashing in kiai sections of circles, slider ends and repeats (all skins). The pictures can't flash, so an
++        /// object would start flashing when its drawable takes over, and a picture drawn during kiai could catch a flash.
++        /// </summary>
++        private static void disableKiaiFlash(Drawable drawable)
++        {
++            // The default and argon circles flash a child of KiaiFlash; legacy circles flash a second copy of the circle sprite.
++            foreach (var flash in drawable.ChildrenOfType<KiaiFlash>())
++                flash.Alpha = 0;
++
++            foreach (var flash in drawable.ChildrenOfType<LegacyKiaiFlashingDrawable>())
++                flash.FlashingDrawable.Scale = Vector2.Zero;
++        }
++
++        /// <summary>
++        /// Lengthens the preempt of every object except spinners (and their nested objects, recursively),
++        /// so that every drawable is fully faded in from <paramref name="appearTime"/> on.
++        /// </summary>
++        public static void ApplyPreempt(OsuHitObject hitObject, double appearTime)
++        {
++            if (hitObject is Spinner)
++                return;
++
++            hitObject.TimePreempt = Math.Max(hitObject.TimePreempt, hitObject.StartTime - appearTime);
++
++            foreach (var nested in hitObject.NestedHitObjects.OfType<OsuHitObject>())
++                ApplyPreempt(nested, appearTime);
++        }
++
++        /// <summary>
++        /// Draws the objects whose drawable hit objects aren't alive yet.
++        /// </summary>
++        /// <remarks>
++        /// <para>
++        /// Pages: consecutive objects drawn once into a cached frame buffer. A page is drawn from frozen copies (<see cref="FrozenObject"/>:
++        /// drawable hit objects on a stopped clock). Page sizes are counted in cost (<see cref="CostOf"/>: a slider costs as much as
++        /// three circles to update and draw). The front page (the next objects) costs at most <see cref="FRONT_PAGE_COST"/>, so taking
++        /// an object out redraws only a few. Later pages are bigger (doubling up to <see cref="MAX_PAGE_COST"/>), which keeps
++        /// the page count low; when a big page becomes the front one it's split again the same way.
++        /// </para>
++        /// <para>
++        /// Frozen copies cost memory (a slider body keeps about a megabyte of renderer buffers), so only the first <see cref="WARM_PAGES"/>
++        /// pages keep them. Later pages are "baked": once their picture is drawn, the copies are disposed and only the picture stays.
++        /// A page gets new copies (loaded in the background) when it becomes one of the first pages, or when its size on screen changed
++        /// for good (the window was resized) and its picture is drawn again at the new size.
++        /// </para>
++        /// <para>
++        /// Pages aren't redrawn while they're scaled (the player's open/close animation): the picture is stretched instead.
++        /// The pages are drawn during the lead-in while the layer is invisible, one per frame, once the layer has stopped changing size
++        /// (<see cref="DrawProbe"/> tells when the draw thread drew one). The layer fades in when all are drawn and it's time to appear.
++        /// </para>
++        /// <para>
++        /// A picture holds premultiplied colours with correct coverage (<see cref="Page.ContentBlending"/>), and is drawn as such, its
++        /// colour scaled with its alpha too when it fades. So pages look exactly like the drawables would, also when semi-transparent
++        /// pieces overlap, and fade like them (the player fading out on exit or restart).
++        /// </para>
++        /// <para>
++        /// Once every page is drawn (and before any object is taken out), each picture is copied into a <see cref="Snapshot"/> that
++        /// outlives the play (<see cref="PictureCache"/>). A retry of the same map with the same mods, skin and window makes its pages
++        /// from those snapshots instead of frozen copies: one quad per page, all in one frame. Only the first pages load copies, in the
++        /// background, for when their objects are taken out.
++        /// </para>
++        /// </remarks>
++        public partial class MafhamLayer : CompositeDrawable
++        {
++            public const int FRONT_PAGE_COST = 16;
++            public const int MAX_PAGE_COST = 64;
++
++            /// <summary>
++            /// What an object costs a page (see <see cref="FRONT_PAGE_COST"/>). A slider's copy is several drawable hit objects with a
++            /// path, and takes about three times a circle's time to update and draw.
++            /// </summary>
++            public static int CostOf(OsuHitObject hitObject) => hitObject is Slider ? 3 : 1;
++
++            private static int costOf(IEnumerable<OsuHitObject> objects) => objects.Sum(CostOf);
++
++            /// <summary>
++            /// How many pages at the front keep their frozen copies (the front page, and the next one getting ready).
++            /// </summary>
++            public const int WARM_PAGES = 2;
++
++            /// <summary>
++            /// How many pages are drawn for the first time at once (each first drawing takes renderer buffers for its slider bodies).
++            /// </summary>
++            private const int max_preparing_pages = 1;
++
++            /// <summary>
++            /// How many frames the layer's place on screen must stay the same before the first pages are drawn (so they aren't drawn
++            /// during the tail end of the player's opening animation, a fraction of a pixel off).
++            /// </summary>
++            private const int stable_frames_before_drawing = 10;
++
++            private readonly OsuModMafham mod;
++            private readonly DrawableOsuRuleset drawableRuleset;
++
++            /// <summary>
++            /// Pages in time order (the front page first).
++            /// </summary>
++            private readonly List<Page> pages = new List<Page>();
++
++            /// <summary>
++            /// Objects taken out of the pages (their drawables came alive) and when, latest last. For rewinding replays.
++            /// </summary>
++            private readonly Stack<(OsuHitObject HitObject, double Time)> passed = new Stack<(OsuHitObject, double)>();
++
++            /// <summary>
++            /// When each object's drawable comes alive: the start of its normal approach (normal preempt).
++            /// </summary>
++            private readonly Dictionary<HitObject, double> liveTimes = new Dictionary<HitObject, double>();
++
++            private Container<Page> pageContainer = null!;
++
++            /// <summary>
++            /// Holds the snapshots while they're drawn (next to the pages, so they're at the same place on screen).
++            /// </summary>
++            private Container<Snapshot> snapshotContainer = null!;
++
++            private double appearTime;
++
++            /// <summary>
++            /// Identifies the pictures (see <see cref="PictureCache"/>), or null if there are no objects.
++            /// </summary>
++            private string? pictureKey;
++
++            /// <summary>
++            /// The part of <see cref="pictureKey"/> that the gameplay start time is worked out from (no skin or settings).
++            /// </summary>
++            private string? playKey;
++
++            /// <summary>
++            /// The kept pictures this play's pages were made from, if any.
++            /// </summary>
++            private PictureCache? usedCache;
++
++            /// <summary>
++            /// The snapshots being drawn, or null.
++            /// </summary>
++            private List<Snapshot>? capturing;
++
++            /// <summary>
++            /// Whether the pictures were kept, or can't be anymore (an object was taken out, or the pages came from kept pictures).
++            /// </summary>
++            private bool captureDone;
++
++            private float pictureOpacity = 1;
++
++            /// <summary>
++            /// The gameplay time at which every page was first drawn (null until then).
++            /// </summary>
++            private double? readyTime;
++
++            private RectangleF lastScreenRect;
++            private int stableFrames;
++
++            [Resolved(CanBeNull = true)]
++            private Screens.Play.GameplayState? gameplayState { get; set; }
++
++            /// <summary>
++            /// Whether anything is drawn (not in headless runs, where pages count as drawn straight away).
++            /// </summary>
++            private bool drawing;
++
++            public MafhamLayer(OsuModMafham mod, DrawableOsuRuleset drawableRuleset)
++            {
++                this.mod = mod;
++                this.drawableRuleset = drawableRuleset;
++
++                RelativeSizeAxes = Axes.Both;
++
++                // Behind the playfield (later objects are drawn below earlier ones), and updated before it.
++                Depth = float.MaxValue / 2;
++
++                // Faded in when the objects appear. Kept present until then, so the pages are drawn (invisibly) during the lead-in.
++                // (An invisible page draws nothing: its colour is scaled with its alpha.)
++                Alpha = 0;
++                AlwaysPresent = true;
++            }
++
++            /// <summary>
++            /// How many objects are drawn by pages right now.
++            /// </summary>
++            public int FrozenCount => pages.Sum(p => p.Objects.Count);
++
++            /// <summary>
++            /// The objects drawn by pages right now.
++            /// </summary>
++            public IEnumerable<OsuHitObject> FrozenHitObjects => pages.SelectMany(p => p.Objects);
++
++            /// <summary>
++            /// How many pages (cached frame buffers) there are right now.
++            /// </summary>
++            public int PageCount => pages.Count;
++
++            /// <summary>
++            /// How many objects the front page (the next objects) holds.
++            /// </summary>
++            public int FrontPageSize => pages.Count > 0 ? pages[0].Objects.Count : 0;
++
++            /// <summary>
++            /// What the front page costs (see <see cref="CostOf"/>).
++            /// </summary>
++            public int FrontPageCost => pages.Count > 0 ? costOf(pages[0].Objects) : 0;
++
++            /// <summary>
++            /// How many frozen copies are in memory right now.
++            /// </summary>
++            public int CopyCount => pages.Sum(p => p.CopyCount);
++
++            /// <summary>
++            /// Whether every page is drawn and shown.
++            /// </summary>
++            public bool AllPagesShown => pages.All(p => p.Shown);
++
++            /// <summary>
++            /// When the map appears.
++            /// </summary>
++            public double AppearTime => appearTime;
++
++            /// <summary>
++            /// How many pages are drawn and shown right now.
++            /// </summary>
++            public int ShownPageCount => pages.Count(p => p.Shown);
++
++            /// <summary>
++            /// How many pages show a kept picture (a retry) right now.
++            /// </summary>
++            public int SnapshotPageCount => pages.Count(p => p.HasSnapshot);
++
++            /// <summary>
++            /// The pictures' opacity (not counting the map's fade-in).
++            /// </summary>
++            public float PictureOpacity => pageContainer.Alpha;
++
++            /// <summary>
++            /// The pictures' colour (their brightness).
++            /// </summary>
++            public ColourInfo PictureColour => pageContainer.Colour;
++
++            /// <summary>
++            /// When an object's picture is taken out: when its drawable comes alive.
++            /// </summary>
++            public double GetRemovalTime(OsuHitObject hitObject) => liveTimes[hitObject];
++
++            // The copies are only pictures; clicks belong to the real objects.
++            public override bool PropagatePositionalInputSubTree => false;
++            public override bool PropagateNonPositionalInputSubTree => false;
++
++            [BackgroundDependencyLoader]
++            private void load(IRenderer renderer, SkinManager? skins, OsuConfigManager? config)
++            {
++                drawing = renderer is not DummyRenderer;
++
++                // This runs while the drawable ruleset loads, before it adds its hit objects (see LoadComplete for their lifetimes).
++                var objects = drawableRuleset.Beatmap.HitObjects.OfType<OsuHitObject>().Where(h => h is not Spinner).OrderBy(h => h.StartTime).ToList();
++
++                var pictures = drawableRuleset.CreatePlayfieldAdjustmentContainer();
++                pictures.Children = new Drawable[]
++                {
++                    pageContainer = new Container<Page>
++                    {
++                        RelativeSizeAxes = Axes.Both,
++                        Colour = new Color4(mod.FarObjectBrightness.Value, mod.FarObjectBrightness.Value, mod.FarObjectBrightness.Value, 1),
++                    },
++                    snapshotContainer = new Container<Snapshot>
++                    {
++                        RelativeSizeAxes = Axes.Both,
++                    },
++                };
++                InternalChild = pictures;
++
++                if (objects.Count == 0)
++                    return;
++
++                // Before the preempt changes (the key doesn't use it, but stays the same work as in ApplyToGameplayStartTime).
++                playKey = GetPlayKey(drawableRuleset.Beatmap, objects, drawableRuleset.Mods);
++                pictureKey = $"{playKey}|{skins?.CurrentSkinInfo.Value.ID}|{config?.Get<bool>(OsuSetting.BeatmapSkins)}|{config?.Get<bool>(OsuSetting.BeatmapColours)}"
++                             + $"|{config?.Get<float>(OsuSetting.ComboColourNormalisationAmount)}";
++
++                appearTime = GetAppearTime(objects, ModUtils.CalculateRateWithMods(drawableRuleset.Mods));
++
++                var frozen = new List<OsuHitObject>();
++
++                foreach (var h in objects)
++                {
++                    liveTimes[h] = h.StartTime - h.TimePreempt;
++                    ApplyPreempt(h, appearTime);
++
++                    if (FrozenObject.CanCopy(h))
++                        frozen.Add(h);
++                }
++
++                var sizes = getPageSizes(frozen);
++                usedCache = PictureCache.Acquire(pictureKey, playKey, sizes);
++
++                if (usedCache != null)
++                {
++                    // A retry: pages made from the kept pictures, without copies (the first pages load theirs in the background).
++                    captureDone = true;
++
++                    int start = 0;
++
++                    for (int i = 0; i < sizes.Count; i++)
++                    {
++                        var page = new Page(frozen.GetRange(start, sizes[i]), new List<FrozenObject>(), prepareLater: true);
++                        page.UseSnapshot(usedCache.Snapshots[i]);
++                        insertPage(i, page);
++                        start += sizes[i];
++                    }
++                }
++                else
++                    insertPages(0, frozen, null, prepareLater: true);
++            }
++
++            protected override void LoadComplete()
++            {
++                base.LoadComplete();
++
++                pageContainer.Alpha = pictureOpacity;
++
++                // The playfield made its entries with the longer preempt, which would bring every drawable alive at once.
++                // They get their normal lifetimes back. (This runs before the playfield's first update, so none is alive yet.)
++                foreach (var entry in drawableRuleset.Playfield.HitObjectContainer.Entries)
++                {
++                    if (liveTimes.TryGetValue(entry.HitObject, out double liveTime))
++                        entry.LifetimeStart = liveTime;
++                }
++            }
++
++            protected override void Update()
++            {
++                base.Update();
++
++                double now = Time.Current;
++
++                // Rewinding (replays): objects taken out later than now are drawn by pages again.
++                if (passed.Count > 0 && passed.Peek().Time > now)
++                {
++                    var returning = new List<OsuHitObject>();
++
++                    while (passed.Count > 0 && passed.Peek().Time > now)
++                        returning.Add(passed.Pop().HitObject);
++
++                    returnObjects(returning);
++                }
++
++                // Objects whose drawables have come alive are taken out of the pages (the playfield shows them from this frame on).
++                while (pages.Count > 0 && GetRemovalTime(pages[0].Objects[0]) <= now)
++                {
++                    var front = pages[0];
++
++                    if (front.Objects.Count > 1 && costOf(front.Objects) > FRONT_PAGE_COST)
++                    {
++                        // Normally its copies were loaded in the background long before; this is only for jumps (seeking).
++                        if (!front.HasCopies)
++                            front.AddCopies(createCopies(front.Objects));
++
++                        var (frontObjects, frontCopies) = takePage(0);
++                        insertPages(0, frontObjects, frontCopies);
++                        continue;
++                    }
++
++                    removeObject(0, front.Objects[0]);
++                }
++
++                updateStableSize();
++
++                // Pages are only drawn again at a new size while the map plays (not in the fail animation, which shrinks the playfield).
++                bool canRefresh = Time.Elapsed > 0 && gameplayState?.HasFailed != true;
++
++                bool stable = stableFrames >= stable_frames_before_drawing;
++
++                // Pages are prepared in time order (only the ones made when the play loaded are), so counting as we go is enough.
++                // Pages made from kept pictures don't count: each is a single quad.
++                int preparing = 0;
++                bool allShown = true;
++
++                for (int i = 0; i < pages.Count; i++)
++                {
++                    var page = pages[i];
++
++                    if (page.Preparing && page.IsDrawn)
++                        page.FinishPreparing();
++
++                    if (page.WaitingToPrepare && stable)
++                    {
++                        // The window changed since the pictures were kept: drawn from copies after all.
++                        if (page.HasSnapshot && !page.SnapshotFits)
++                            page.DropSnapshot();
++
++                        if (page.HasSnapshot)
++                            page.Prepare();
++                        else if (!page.HasCopies)
++                            loadCopies(page);
++                        else if (preparing < max_preparing_pages && page.CopiesWarm)
++                            page.Prepare();
++                    }
++
++                    if (page.Preparing && !page.HasSnapshot)
++                        preparing++;
++
++                    allShown &= page.Shown;
++
++                    bool refresh = canRefresh && page.NeedsRefresh;
++
++                    if (refresh && page.HasSnapshot && !page.SnapshotFits)
++                        page.DropSnapshot();
++
++                    if (refresh && page.CanRedraw)
++                        page.Refresh();
++
++                    bool warm = i < WARM_PAGES || (refresh && !page.CanRedraw);
++
++                    if (warm && !page.HasCopies)
++                        loadCopies(page);
++                    else if (!warm && page.HasCopies && page.Shown && page.IsDrawn)
++                        page.Bake();
++                }
++
++                warmCopies();
++                updateAlpha(now, allShown);
++                updateCapture();
++            }
++
++            /// <summary>
++            /// How much of a frame (in milliseconds) goes to the copies' first updates.
++            /// </summary>
++            private const double warm_budget = 3;
++
++            private readonly System.Diagnostics.Stopwatch warmWatch = new System.Diagnostics.Stopwatch();
++
++            /// <summary>
++            /// Gives copies their first update, a few per frame, front pages first (see <see cref="FrozenObject.Warm"/>).
++            /// </summary>
++            private void warmCopies()
++            {
++                warmWatch.Restart();
++
++                foreach (var page in pages)
++                {
++                    if (!page.HasCopies)
++                        continue;
++
++                    if (!page.WarmCopies(warmWatch, warm_budget))
++                        return;
++                }
++            }
++
++            /// <summary>
++            /// Applies the state again to the drawables that are alive (after Mafham was switched on or off), like a replay seek would.
++            /// </summary>
++            public void RefreshLiveObjects()
++            {
++                foreach (var drawable in drawableRuleset.Playfield.AllHitObjects)
++                    drawable.RefreshStateTransforms();
++            }
++
++            /// <summary>
++            /// Makes the pictures (not the playable objects) more or less visible (replays with Mafham switched off).
++            /// </summary>
++            public void SetPictureOpacity(float opacity)
++            {
++                pictureOpacity = opacity;
++
++                // Straight away: a fade wouldn't move while the replay is paused.
++                if (IsLoaded)
++                    pageContainer.Alpha = opacity;
++            }
++
++            /// <summary>
++            /// Once every page is drawn, copies the pictures into snapshots and keeps them for a retry.
++            /// </summary>
++            private void updateCapture()
++            {
++                if (captureDone || pictureKey == null || readyTime == null)
++                    return;
++
++                // Only the pictures as they were first drawn are kept (an object taken out changes a page).
++                if (passed.Count > 0)
++                {
++                    abortCapture();
++                    return;
++                }
++
++                if (capturing == null)
++                {
++                    capturing = pages.Select(p => new Snapshot(p, drawing)).ToList();
++                    snapshotContainer.AddRange(capturing);
++                    return;
++                }
++
++                foreach (var snapshot in capturing)
++                {
++                    if (!snapshot.IsDrawn)
++                        return;
++                }
++
++                foreach (var snapshot in capturing)
++                {
++                    snapshotContainer.Remove(snapshot, false);
++                    snapshot.ReleaseSource();
++                }
++
++                PictureCache.Store(new PictureCache(pictureKey, playKey!, capturing, pages.Select(p => p.Objects.Count).ToList()));
++
++                capturing = null;
++                captureDone = true;
++            }
++
++            private void abortCapture()
++            {
++                captureDone = true;
++
++                if (capturing == null)
++                    return;
++
++                foreach (var snapshot in capturing)
++                    snapshotContainer.Remove(snapshot, true);
++
++                capturing = null;
++            }
++
++            /// <summary>
++            /// The map appears all at once: it fades in at <see cref="appearTime"/>, or shows straight away when the pages are all drawn
++            /// if that's later (a slow computer, or a seek during the lead-in).
++            /// </summary>
++            private void updateAlpha(double now, bool allShown)
++            {
++                if (allShown && readyTime == null)
++                    readyTime = now;
++
++                if (readyTime is not double ready)
++                    Alpha = 0;
++                else if (ready > appearTime)
++                    Alpha = now >= ready ? 1 : 0;
++                else
++                    Alpha = (float)Math.Clamp((now - appearTime) / FADE_IN_DURATION, 0, 1);
++            }
++
++            private void updateStableSize()
++            {
++                RectangleF screenRect = ScreenSpaceDrawQuad.AABBFloat;
++
++                if (Vector2.Distance(screenRect.TopLeft, lastScreenRect.TopLeft) > 0.01f || Vector2.Distance(screenRect.Size, lastScreenRect.Size) > 0.01f)
++                    stableFrames = 0;
++                else
++                    stableFrames++;
++
++                lastScreenRect = screenRect;
++            }
++
++            private void removeObject(int pageIndex, OsuHitObject hitObject)
++            {
++                var page = pages[pageIndex];
++
++                // Normally its copies were loaded in the background long before; this is only for jumps (seeking).
++                if (!page.HasCopies)
++                    page.AddCopies(createCopies(page.Objects));
++
++                page.Remove(hitObject);
++                passed.Push((hitObject, Time.Current));
++
++                if (page.Objects.Count == 0)
++                {
++                    pages.RemoveAt(pageIndex);
++                    pageContainer.Remove(page, true);
++                }
++            }
++
++            private List<FrozenObject> createCopies(IEnumerable<OsuHitObject> objects) =>
++                objects.Select(h => new FrozenObject(h, liveTimes[h], appearTime, drawableRuleset.Mods)).ToList();
++
++            private void loadCopies(Page page)
++            {
++                if (page.LoadingCopies)
++                    return;
++
++                page.LoadingCopies = true;
++
++                var copies = createCopies(page.Objects);
++
++                LoadComponentsAsync(copies, loaded =>
++                {
++                    page.LoadingCopies = false;
++
++                    // The page is gone, or got copies some other way in the meantime.
++                    if (!pages.Contains(page) || page.HasCopies)
++                    {
++                        DisposeInBackground(loaded);
++                        return;
++                    }
++
++                    page.AddCopies(loaded.ToList());
++                });
++            }
++
++            /// <summary>
++            /// Puts objects back into the pages (rewinding).
++            /// </summary>
++            /// <remarks>
++            /// A replay rewinds in small steps, a few objects at a time, normally all earlier than the front page. They join the front
++            /// page while it's small, otherwise they start a new one, and neighbouring pages at the front are merged while the first isn't
++            /// smaller than the second (like a binary counter). So each copy is redrawn only a few times and there are never many pages.
++            /// </remarks>
++            private void returnObjects(List<OsuHitObject> returning)
++            {
++                var copies = createCopies(returning);
++
++                // Returning objects are normally all earlier than the front page; if not, they're merged in time order.
++                bool mergeFront = pages.Count > 0 && returning.Max(h => h.StartTime) > pages[0].Objects[0].StartTime;
++
++                if (mergeFront || (pages.Count > 0 && costOf(pages[0].Objects) + costOf(returning) <= FRONT_PAGE_COST))
++                {
++                    if (!pages[0].HasCopies)
++                        pages[0].AddCopies(createCopies(pages[0].Objects));
++
++                    var (frontObjects, frontCopies) = takePage(0);
++                    returning.AddRange(frontObjects);
++                    copies.AddRange(frontCopies);
++                }
++
++                var sorted = returning.Zip(copies).OrderBy(p => p.First.StartTime).ToList();
++                returning = sorted.Select(p => p.First).ToList();
++                copies = sorted.Select(p => p.Second).ToList();
++
++                if (costOf(returning) > FRONT_PAGE_COST)
++                {
++                    insertPages(0, returning, copies);
++                    return;
++                }
++
++                insertPage(0, new Page(returning, copies));
++
++                while (pages.Count >= 2 && pages[0].HasCopies && pages[1].HasCopies
++                       && costOf(pages[0].Objects) >= costOf(pages[1].Objects)
++                       && costOf(pages[0].Objects) + costOf(pages[1].Objects) <= MAX_PAGE_COST)
++                {
++                    var (firstObjects, firstCopies) = takePage(0);
++                    var (secondObjects, secondCopies) = takePage(0);
++
++                    insertPage(0, new Page(firstObjects.Concat(secondObjects).ToList(), firstCopies.Concat(secondCopies).ToList()));
++                }
++            }
++
++            /// <summary>
++            /// Removes a page and returns its objects and copies (the copies aren't disposed).
++            /// </summary>
++            private (List<OsuHitObject> Objects, List<FrozenObject> Copies) takePage(int index)
++            {
++                var page = pages[index];
++
++                pages.RemoveAt(index);
++                pageContainer.Remove(page, false);
++
++                var result = (page.Objects.ToList(), page.TakeCopies());
++                page.Dispose();
++                return result;
++            }
++
++            private void insertPage(int index, Page page)
++            {
++                page.WaitsForDraw = drawing;
++                pages.Insert(index, page);
++                pageContainer.Add(page);
++            }
++
++            /// <summary>
++            /// Puts objects (in time order) into new pages at <paramref name="index"/> (see <see cref="getPageSizes"/>).
++            /// </summary>
++            /// <param name="index">Where the new pages go.</param>
++            /// <param name="objects">The objects.</param>
++            /// <param name="copies">Their copies, or null to make new ones.</param>
++            /// <param name="prepareLater">
++            /// Whether the pages are drawn later, while invisible, a few at a time. Otherwise they're shown right away: their copies are
++            /// updated before they're first drawn, in the same frame.
++            /// </param>
++            private void insertPages(int index, List<OsuHitObject> objects, List<FrozenObject>? copies, bool prepareLater = false)
++            {
++                copies ??= createCopies(objects);
++
++                int start = 0;
++
++                foreach (int count in getPageSizes(objects))
++                {
++                    insertPage(index++, new Page(objects.GetRange(start, count), copies.GetRange(start, count), prepareLater));
++                    start += count;
++                }
++            }
++
++            /// <summary>
++            /// How many objects each page gets, in order: pages cost up to <see cref="FRONT_PAGE_COST"/> twice, then doubling up to
++            /// <see cref="MAX_PAGE_COST"/> (a page always gets at least one object).
++            /// </summary>
++            private static List<int> getPageSizes(IReadOnlyList<OsuHitObject> objects)
++            {
++                var sizes = new List<int>();
++
++                int limit = FRONT_PAGE_COST;
++                bool first = true;
++                int index = 0;
++
++                while (index < objects.Count)
++                {
++                    int count = 0;
++                    int cost = 0;
++
++                    while (index < objects.Count && (count == 0 || cost + CostOf(objects[index]) <= limit))
++                    {
++                        cost += CostOf(objects[index]);
++                        count++;
++                        index++;
++                    }
++
++                    sizes.Add(count);
++
++                    if (!first)
++                        limit = Math.Min(limit * 2, MAX_PAGE_COST);
++
++                    first = false;
++                }
++
++                return sizes;
++            }
++
++            protected override void Dispose(bool isDisposing)
++            {
++                base.Dispose(isDisposing);
++
++                // (Snapshots still being drawn are children, disposed with the layer.)
++                usedCache?.Release();
++                usedCache = null;
++            }
++
++            /// <summary>
++            /// Consecutive objects drawn into a cached frame buffer, sized to just cover them.
++            /// </summary>
++            internal partial class Page : PictureBuffer
++            {
++                /// <summary>
++                /// How the copies are drawn into the frame buffer: the usual blending for colours, but with correct coverage
++                /// (o!f's default adds up alpha, which would make overlapping semi-transparent pieces opaque and hide what's behind the page).
++                /// The frame buffer then holds premultiplied colours.
++                /// </summary>
++                public static BlendingParameters ContentBlending => new BlendingParameters
++                {
++                    Source = BlendingType.SrcAlpha,
++                    Destination = BlendingType.OneMinusSrcAlpha,
++                    SourceAlpha = BlendingType.One,
++                    DestinationAlpha = BlendingType.OneMinusSrcAlpha,
++                    RGBEquation = BlendingEquation.Add,
++                    AlphaEquation = BlendingEquation.Add,
++                };
++
++                /// <summary>
++                /// How many frames a new place on screen must last before the page is drawn again there.
++                /// </summary>
++                private const int refresh_stable_frames = 30;
++
++                /// <summary>
++                /// The objects drawn by this page, in time order.
++                /// </summary>
++                public readonly List<OsuHitObject> Objects;
++
++                /// <summary>
++                /// Their frozen copies (in the same order), or none when the page is baked (only its picture is kept).
++                /// </summary>
++                private readonly List<FrozenObject> copies;
++
++                private readonly Container content;
++                private readonly DrawProbe probe;
++
++                /// <summary>
++                /// The area the objects cover, in playfield coordinates.
++                /// </summary>
++                private readonly RectangleF bounds;
++
++                /// <summary>
++                /// Frames left in which the page is redrawn. (A copy is updated in the same frame, before it's drawn. Each extra redraw
++                /// would give every slider body another draw node, with its own megabyte of renderer buffers.)
++                /// </summary>
++                private int redrawFrames;
++
++                /// <summary>
++                /// The page's rectangle on screen (in whole pixels) when its picture was last drawn, or null if it hasn't been drawn yet.
++                /// </summary>
++                private RectangleI? drawnScreenRect;
++
++                private RectangleI lastScreenRect;
++                private int rectStableFrames;
++
++                public bool LoadingCopies;
++
++                /// <summary>
++                /// Whether <see cref="IsDrawn"/> waits for the draw thread (false when nothing is drawn).
++                /// </summary>
++                public bool WaitsForDraw = true;
++
++                public bool WaitingToPrepare { get; private set; }
++                public bool Preparing { get; private set; }
++
++                /// <summary>
++                /// Whether the page should be drawn again, because its place on screen has changed for good (the window was resized).
++                /// </summary>
++                public bool NeedsRefresh { get; private set; }
++
++                public Page(List<OsuHitObject> objects, List<FrozenObject> copies, bool prepareLater = false)
++                {
++                    Objects = objects;
++                    this.copies = copies;
++
++                    bounds = FrozenObject.ComputeBounds(objects[0]);
++
++                    foreach (var h in objects)
++                        bounds = RectangleF.Union(bounds, FrozenObject.ComputeBounds(h));
++
++                    // Placed on whole screen pixels when it's drawn (see alignToPixels).
++                    Position = bounds.TopLeft;
++                    Size = bounds.Size;
++
++                    // Earlier objects are drawn above later ones.
++                    Depth = (float)objects[0].StartTime;
++
++                    InternalChild = content = new Container
++                    {
++                        Blending = ContentBlending,
++                        Position = -bounds.TopLeft,
++                        Size = OsuPlayfield.BASE_SIZE,
++                        Child = probe = new DrawProbe { Position = bounds.TopLeft },
++                    };
++
++                    content.AddRange(copies);
++
++                    if (prepareLater)
++                    {
++                        Alpha = 0;
++                        WaitingToPrepare = true;
++                    }
++                    else
++                        redrawFrames = 1;
++                }
++
++                public int CopyCount => copies.Count;
++
++                public bool HasCopies => copies.Count > 0;
++
++                /// <summary>
++                /// Shows a kept picture (<see cref="Snapshot"/>), drawn into this page's frame buffer instead of copies until the page gets
++                /// copies or the picture doesn't fit anymore.
++                /// </summary>
++                private BufferedContainerView<Drawable>? snapshotView;
++
++                /// <summary>
++                /// Where the kept picture was drawn on screen.
++                /// </summary>
++                private RectangleI snapshotRect;
++
++                /// <summary>
++                /// Where the page's picture was last drawn on screen (in whole pixels), or null if it hasn't been drawn yet.
++                /// </summary>
++                public RectangleI? DrawnScreenRect => drawnScreenRect;
++
++                public bool HasSnapshot => snapshotView != null;
++
++                /// <summary>
++                /// Whether the kept picture would be drawn exactly where it was drawn from (otherwise it'd be stretched).
++                /// </summary>
++                public bool SnapshotFits => snapshotView != null && computeScreenRect() == snapshotRect;
++
++                /// <summary>
++                /// Whether the page's picture can be drawn (again) now.
++                /// </summary>
++                public bool CanRedraw => HasCopies || HasSnapshot;
++
++                public void UseSnapshot(Snapshot snapshot)
++                {
++                    snapshotRect = snapshot.ScreenRect;
++
++                    AddInternal(snapshotView = snapshot.CreateView().With(v => v.RelativeSizeAxes = Axes.Both));
++                }
++
++                public void DropSnapshot()
++                {
++                    if (snapshotView == null)
++                        return;
++
++                    RemoveInternal(snapshotView, true);
++                    snapshotView = null;
++                }
++
++                public bool Shown => !WaitingToPrepare && !Preparing;
++
++                /// <summary>
++                /// Whether the picture has been drawn since the last change.
++                /// </summary>
++                public bool IsDrawn => redrawFrames == 0 && (!WaitsForDraw || probe.DrawnVersion >= probe.Version);
++
++                /// <summary>
++                /// Draws the page while it's still invisible.
++                /// </summary>
++                public void Prepare()
++                {
++                    WaitingToPrepare = false;
++                    Preparing = true;
++                    AlwaysPresent = true;
++                    redrawFrames = 1;
++                }
++
++                public void FinishPreparing()
++                {
++                    Preparing = false;
++                    AlwaysPresent = false;
++                    Alpha = 1;
++                }
++
++                public void Remove(OsuHitObject hitObject)
++                {
++                    int index = Objects.IndexOf(hitObject);
++
++                    Objects.RemoveAt(index);
++
++                    var copy = copies[index];
++                    copies.RemoveAt(index);
++                    content.Remove(copy, false);
++                    DisposeInBackground(new[] { copy });
++
++                    redrawFrames = Math.Max(redrawFrames, 1);
++                }
++
++                public List<FrozenObject> TakeCopies()
++                {
++                    var all = copies.ToList();
++
++                    foreach (var copy in all)
++                        content.Remove(copy, false);
++
++                    copies.Clear();
++                    return all;
++                }
++
++                public void AddCopies(List<FrozenObject> newCopies)
++                {
++                    copies.AddRange(newCopies);
++                    content.AddRange(newCopies);
++
++                    // Same picture as before, so it isn't redrawn (the layer asks for a refresh if needed). The layer warms the copies
++                    // a few per frame, so they're ready when the next redraw comes.
++                }
++
++                /// <summary>
++                /// Whether every copy has had its first update (see <see cref="FrozenObject.Warm"/>).
++                /// </summary>
++                public bool CopiesWarm
++                {
++                    get
++                    {
++                        foreach (var copy in copies)
++                        {
++                            if (!copy.IsWarm)
++                                return false;
++                        }
++
++                        return true;
++                    }
++                }
++
++                /// <summary>
++                /// Gives copies their first update until <paramref name="watch"/> passes <paramref name="budget"/> milliseconds.
++                /// </summary>
++                /// <returns>Whether every copy is warm.</returns>
++                public bool WarmCopies(System.Diagnostics.Stopwatch watch, double budget)
++                {
++                    foreach (var copy in copies)
++                    {
++                        if (copy.IsWarm)
++                            continue;
++
++                        if (watch.Elapsed.TotalMilliseconds >= budget)
++                            return false;
++
++                        copy.Warm();
++                    }
++
++                    return true;
++                }
++
++                /// <summary>
++                /// Draws the picture again at the page's current size on screen.
++                /// </summary>
++                public void Refresh()
++                {
++                    NeedsRefresh = false;
++                    redrawFrames = Math.Max(redrawFrames, 1);
++                }
++
++                /// <summary>
++                /// Disposes the copies and keeps only the picture.
++                /// </summary>
++                public void Bake() => DisposeInBackground(TakeCopies());
++
++
++
++                protected override void Update()
++                {
++                    RectangleI screenRect = computeScreenRect();
++
++                    // Copies take over from a kept picture (they're needed when an object is taken out), and a kept picture is only drawn
++                    // where it was drawn from.
++                    if (redrawFrames > 0 && snapshotView != null && (HasCopies || screenRect != snapshotRect))
++                        DropSnapshot();
++
++                    bool redraw = redrawFrames > 0 && CanRedraw;
++
++                    // Before the buffered container's update, which sees the new size and redraws in this frame too.
++                    if (redraw)
++                        alignToPixels(screenRect);
++
++                    base.Update();
++
++                    if (redraw)
++                    {
++                        redrawFrames--;
++                        probe.Request();
++                        ForceRedraw();
++                        drawnScreenRect = screenRect;
++                    }
++
++                    // The window was resized: once the new place has lasted a moment, the picture is drawn again there.
++                    // (Not while it keeps changing, like during the player's open/close animation.)
++                    if (screenRect != lastScreenRect)
++                        rectStableFrames = 0;
++                    else
++                        rectStableFrames++;
++
++                    lastScreenRect = screenRect;
++
++                    if (drawnScreenRect is RectangleI drawn && !NeedsRefresh && rectStableFrames >= refresh_stable_frames && screenRect != drawn)
++                        NeedsRefresh = true;
++                }
++
++                /// <summary>
++                /// The objects' area on screen, widened to whole pixels.
++                /// </summary>
++                private RectangleI computeScreenRect()
++                {
++                    var parent = (Drawable)Parent!;
++
++                    Vector2 a = parent.ToScreenSpace(bounds.TopLeft);
++                    Vector2 b = parent.ToScreenSpace(bounds.BottomRight);
++
++                    int left = (int)MathF.Floor(MathF.Min(a.X, b.X));
++                    int top = (int)MathF.Floor(MathF.Min(a.Y, b.Y));
++                    int right = (int)MathF.Ceiling(MathF.Max(a.X, b.X));
++                    int bottom = (int)MathF.Ceiling(MathF.Max(a.Y, b.Y));
++
++                    return new RectangleI(left, top, right - left, bottom - top);
++                }
++
++                /// <summary>
++                /// Puts the page exactly on <paramref name="screenRect"/>. A frame buffer is as big as its drawable's size on screen,
++                /// rounded up, and is drawn back over that (fractional) area with nearest filtering. On fractional pixels the picture
++                /// would be shifted by up to a pixel and lose a row and column of pixels somewhere (looking compressed next to the live
++                /// objects); on whole pixels each of its pixels lands on the screen pixel it was drawn for.
++                /// </summary>
++                private void alignToPixels(RectangleI screenRect)
++                {
++                    var parent = (Drawable)Parent!;
++
++                    // A hair smaller than the whole pixels, so rounding errors never make the frame buffer a pixel bigger.
++                    Vector2 topLeft = parent.ToLocalSpace(new Vector2(screenRect.Left, screenRect.Top));
++                    Vector2 bottomRight = parent.ToLocalSpace(new Vector2(screenRect.Right - 0.01f, screenRect.Bottom - 0.01f));
++
++                    Position = topLeft;
++                    Size = bottomRight - topLeft;
++                    content.Position = -topLeft;
++                }
++            }
++        }
++
++        /// <summary>
++        /// Lets the viewer of a replay click Mafham's icons (the HUD's, and a skin's own mod display) to switch it on and off
++        /// (<see cref="SetEffectsEnabled"/>). A switched-off icon is greyed out.
++        /// </summary>
++        /// <remarks>
++        /// The icons aren't Mafham's to change, so the toggle puts its own clickable areas over them. It looks for them twice a second
++        /// (mod displays make their icons when they load, and again when the skin changes) and follows them every frame.
++        /// </remarks>
++        public partial class ReplayToggle : CompositeDrawable
++        {
++            private const double scan_interval = 500;
++
++            private readonly OsuModMafham mod;
++            private readonly Drawable hud;
++
++            private readonly List<ModIcon> icons = new List<ModIcon>();
++            private readonly List<ClickArea> areas = new List<ClickArea>();
++
++            private double nextScan;
++
++            public ReplayToggle(OsuModMafham mod, Drawable hud)
++            {
++                this.mod = mod;
++                this.hud = hud;
++
++                RelativeSizeAxes = Axes.Both;
++
++                // Above everything else in the HUD, so it gets the click before the icon does.
++                Depth = float.MinValue;
++            }
++
++            /// <summary>
++            /// The icons being followed (tests).
++            /// </summary>
++            public IReadOnlyList<ModIcon> Icons => icons;
++
++            /// <summary>
++            /// Clicks an icon's area (tests).
++            /// </summary>
++            public void Toggle() => mod.SetEffectsEnabled(!mod.EffectsEnabled);
++
++            protected override void Update()
++            {
++                base.Update();
++
++                if (Time.Current >= nextScan)
++                {
++                    nextScan = Time.Current + scan_interval;
++                    scan();
++                }
++
++                for (int i = 0; i < icons.Count; i++)
++                {
++                    var icon = icons[i];
++                    var area = areas[i];
++
++                    bool shown = icon.IsAlive && icon.IsPresent && icon.Parent != null;
++                    area.Active = shown;
++
++                    if (!shown)
++                        continue;
++
++                    var rect = icon.ScreenSpaceDrawQuad.AABBFloat;
++                    Vector2 topLeft = ToLocalSpace(rect.TopLeft);
++                    Vector2 bottomRight = ToLocalSpace(rect.BottomRight);
++
++                    area.Position = topLeft;
++                    area.Size = bottomRight - topLeft;
++
++                    icon.Colour = mod.EffectsEnabled ? Color4.White : Color4.Gray;
++                }
++            }
++
++            private void scan()
++            {
++                icons.Clear();
++                icons.AddRange(hud.ChildrenOfType<ModIcon>().Where(i => i.Mod is OsuModMafham));
++
++                while (areas.Count < icons.Count)
++                {
++                    var area = new ClickArea(Toggle);
++                    areas.Add(area);
++                    AddInternal(area);
++                }
++
++                for (int i = icons.Count; i < areas.Count; i++)
++                    areas[i].Active = false;
++            }
++
++            /// <summary>
++            /// An invisible area that switches Mafham when clicked.
++            /// </summary>
++            private partial class ClickArea : Drawable
++            {
++                private readonly Action onClick;
++
++                /// <summary>
++                /// Whether it's over a shown icon (only then it takes clicks).
++                /// </summary>
++                public bool Active;
++
++                public ClickArea(Action onClick)
++                {
++                    this.onClick = onClick;
++
++                    // Invisible, but takes clicks (an alpha of 0 would make it not present, so it'd get none).
++                    AlwaysPresent = true;
++                }
++
++                public override bool ReceivePositionalInputAt(Vector2 screenSpacePos) => Active && base.ReceivePositionalInputAt(screenSpacePos);
++
++                protected override bool OnClick(ClickEvent e)
++                {
++                    onClick();
++                    return true;
++                }
++            }
++        }
++
++        /// <summary>
++        /// A cached frame buffer that holds premultiplied colours (see <see cref="MafhamLayer.Page.ContentBlending"/>) and is drawn as such.
++        /// </summary>
++        public abstract partial class PictureBuffer : BufferedContainer, IBufferedDrawable
++        {
++            protected PictureBuffer()
++                : base(pixelSnapping: true, cachedFrameBuffer: true)
++            {
++                // A scaled picture (e.g. the player's open/close animation) is shown stretched instead of being redrawn every frame.
++                RedrawOnScale = false;
++
++                // Otherwise semi-transparent parts (slider bodies, many skins' circles) would look darker than live. A view of the picture
++                // (BufferedContainerView) draws it with this blending too, so drawing a view onto a clear frame buffer copies the picture.
++                EffectBlending = new BlendingParameters
++                {
++                    Source = BlendingType.One,
++                    Destination = BlendingType.OneMinusSrcAlpha,
++                    SourceAlpha = BlendingType.One,
++                    DestinationAlpha = BlendingType.OneMinusSrcAlpha,
++                    RGBEquation = BlendingEquation.Add,
++                    AlphaEquation = BlendingEquation.Add,
++                };
++            }
++
++            /// <summary>
++            /// The colour the picture is drawn with: premultiplied too (scaled with its alpha), since the picture is. Otherwise a fading
++            /// picture (e.g. the player fading out) would be added onto what's behind it, glaring white where many objects overlap.
++            /// Changing it doesn't redraw the picture (unlike <see cref="BufferedContainer{T}.EffectColour"/>).
++            /// </summary>
++            DrawColourInfo? IBufferedDrawable.FrameBufferDrawColour
++            {
++                get
++                {
++                    var info = FrameBufferDrawColour!.Value;
++                    var colour = info.Colour;
++
++                    if (colour.HasSingleColour)
++                        colour = ColourInfo.SingleColour(premultiply(colour.TopLeft));
++                    else
++                    {
++                        colour.TopLeft = premultiply(colour.TopLeft);
++                        colour.TopRight = premultiply(colour.TopRight);
++                        colour.BottomLeft = premultiply(colour.BottomLeft);
++                        colour.BottomRight = premultiply(colour.BottomRight);
++                    }
++
++                    return new DrawColourInfo(colour, info.Blending);
++                }
++            }
++
++            private static SRGBColour premultiply(SRGBColour colour)
++            {
++                Color4 c = colour.SRGB;
++                return new SRGBColour { SRGB = new Color4(c.R * c.A, c.G * c.A, c.B * c.A, c.A) };
++            }
++        }
++
++        /// <summary>
++        /// A copy of a page's picture as first drawn, kept after the play for a retry (<see cref="PictureCache"/>).
++        /// </summary>
++        /// <remarks>
++        /// Drawn once next to its page (same place on screen), from a view of the page's frame buffer, then taken out of the draw tree:
++        /// its frame buffer stays as long as it isn't disposed, and pages of later plays draw views of it.
++        /// </remarks>
++        public sealed partial class Snapshot : PictureBuffer
++        {
++            /// <summary>
++            /// Where the picture was drawn on screen.
++            /// </summary>
++            public readonly RectangleI ScreenRect;
++
++            private readonly DrawProbe probe;
++            private readonly bool waitsForDraw;
++
++            internal Snapshot(MafhamLayer.Page page, bool waitsForDraw)
++            {
++                this.waitsForDraw = waitsForDraw;
++
++                ScreenRect = page.DrawnScreenRect ?? default;
++                Position = page.Position;
++                Size = page.Size;
++
++                // Its frame buffer is drawn, but it's never shown itself (its colour is scaled with its alpha).
++                Alpha = 0;
++                AlwaysPresent = true;
++
++                InternalChildren = new Drawable[]
++                {
++                    page.CreateView().With(v => v.RelativeSizeAxes = Axes.Both),
++                    probe = new DrawProbe(),
++                };
++            }
++
++            protected override void LoadComplete()
++            {
++                base.LoadComplete();
++                probe.Request();
++            }
++
++            public bool IsDrawn => !waitsForDraw || (probe.Version > 0 && probe.DrawnVersion >= probe.Version);
++
++            /// <summary>
++            /// Lets go of the page once the picture is copied (and the snapshot is out of the draw tree, so it isn't drawn again).
++            /// </summary>
++            public void ReleaseSource()
++            {
++                AlwaysPresent = false;
++                ClearInternal();
++            }
++        }
++
++        /// <summary>
++        /// The pictures of the last map played with Mafham (one <see cref="Snapshot"/> per page), so a retry doesn't draw them again.
++        /// </summary>
++        /// <remarks>
++        /// Only one map's pictures are kept (about as much GPU memory as the play's pages). They're disposed when another map's pictures
++        /// are kept and no play uses them anymore.
++        /// </remarks>
++        public sealed class PictureCache
++        {
++            private static readonly object gate = new object();
++            private static PictureCache? current;
++
++            /// <summary>
++            /// The kept pictures, if any.
++            /// </summary>
++            public static PictureCache? Current
++            {
++                get
++                {
++                    lock (gate)
++                        return current;
++                }
++            }
++
++            /// <summary>
++            /// The play, skin and settings the pictures were drawn with.
++            /// </summary>
++            public readonly string Key;
++
++            /// <summary>
++            /// The play the pictures were drawn for (see <see cref="GetPlayKey"/>).
++            /// </summary>
++            public readonly string PlayKey;
++
++            public readonly IReadOnlyList<Snapshot> Snapshots;
++
++            /// <summary>
++            /// How many objects each page held.
++            /// </summary>
++            public readonly IReadOnlyList<int> PageSizes;
++
++            private int users;
++            private bool retired;
++
++            public PictureCache(string key, string playKey, IReadOnlyList<Snapshot> snapshots, IReadOnlyList<int> pageSizes)
++            {
++                Key = key;
++                PlayKey = playKey;
++                Snapshots = snapshots;
++                PageSizes = pageSizes;
++            }
++
++            /// <summary>
++            /// Whether pictures are kept for a play (they may still not fit, e.g. after a skin change).
++            /// </summary>
++            public static bool HasPlay(string playKey)
++            {
++                lock (gate)
++                    return current?.PlayKey == playKey;
++            }
++
++            /// <summary>
++            /// The kept pictures for a play with these pages, or null. Each acquired cache must be released.
++            /// </summary>
++            public static PictureCache? Acquire(string key, string playKey, IReadOnlyList<int> pageSizes)
++            {
++                lock (gate)
++                {
++                    if (current == null || current.Key != key || current.PlayKey != playKey || !current.PageSizes.SequenceEqual(pageSizes))
++                        return null;
++
++                    current.users++;
++                    return current;
++                }
++            }
++
++            public void Release()
++            {
++                lock (gate)
++                {
++                    users--;
++
++                    if (retired && users == 0)
++                        dispose();
++                }
++            }
++
++            /// <summary>
++            /// Keeps new pictures (the previous ones go once no play uses them).
++            /// </summary>
++            public static void Store(PictureCache cache)
++            {
++                lock (gate)
++                {
++                    retire();
++                    current = cache;
++                }
++            }
++
++            public static void Clear()
++            {
++                lock (gate)
++                {
++                    retire();
++                    current = null;
++                }
++            }
++
++            private static void retire()
++            {
++                if (current == null)
++                    return;
++
++                current.retired = true;
++
++                if (current.users == 0)
++                    current.dispose();
++            }
++
++            private void dispose()
++            {
++                foreach (var snapshot in Snapshots)
++                    snapshot.Dispose();
++            }
++        }
++
++        /// <summary>
++        /// Tells when the draw thread has drawn the page it's in (it's drawn only when the page's frame buffer is redrawn).
++        /// </summary>
++        public partial class DrawProbe : Drawable
++        {
++            /// <summary>
++            /// The latest requested version (update thread).
++            /// </summary>
++            public long Version { get; private set; }
++
++            private long drawnVersion;
++
++            /// <summary>
++            /// The latest version the draw thread has drawn.
++            /// </summary>
++            public long DrawnVersion => Interlocked.Read(ref drawnVersion);
++
++            public DrawProbe()
++            {
++                Size = Vector2.One;
++            }
++
++            public void Request()
++            {
++                Version++;
++                Invalidate(Invalidation.DrawNode);
++            }
++
++            protected override DrawNode CreateDrawNode() => new ProbeDrawNode(this);
++
++            private class ProbeDrawNode : DrawNode
++            {
++                private new DrawProbe Source => (DrawProbe)base.Source;
++
++                private long version;
++
++                public ProbeDrawNode(DrawProbe source)
++                    : base(source)
++                {
++                }
++
++                public override void ApplyState()
++                {
++                    base.ApplyState();
++                    version = Source.Version;
++                }
++
++                protected override void Draw(IRenderer renderer)
++                {
++                    base.Draw(renderer);
++
++                    long current;
++
++                    do
++                    {
++                        current = Interlocked.Read(ref Source.drawnVersion);
++
++                        if (current >= version)
++                            return;
++                    } while (Interlocked.CompareExchange(ref Source.drawnVersion, version, current) != current);
++                }
++            }
++        }
++
++        /// <summary>
++        /// Disposes drawables (already out of the draw tree) on o!f's background disposal thread. Disposing a frozen slider copy takes
++        /// a few milliseconds of the update thread otherwise (each of its skinned parts unsubscribes from skin changes, one by one):
++        /// a page of 64 sliders made a frame of up to 200 ms.
++        /// </summary>
++        public static void DisposeInBackground(IEnumerable<Drawable> drawables)
++        {
++            // ClearInternal hands its children to the disposal queue (Remove(…, true) would dispose right away).
++            var bin = new Container();
++
++            foreach (var drawable in drawables)
++                bin.Add(drawable);
++
++            bin.Clear(true);
++        }
++
++        /// <summary>
++        /// A drawable hit object on a stopped clock: the object as it looks when its real drawable comes alive.
++        /// </summary>
++        public partial class FrozenObject : Container
++        {
++            public readonly OsuHitObject HitObject;
++
++            private readonly DrawableOsuHitObject drawable;
++            private readonly IReadOnlyList<Mod> mods;
++            private bool modsApplied;
++
++            /// <summary>
++            /// Whether the object can have a copy. Others show up when their drawables come alive.
++            /// Exact types only: objects added by other patches may look different from the ones they derive from.
++            /// </summary>
++            public static bool CanCopy(HitObject hitObject) => hitObject.GetType() == typeof(HitCircle) || hitObject.GetType() == typeof(Slider);
++
++            /// <summary>
++            /// Whether a drawable is the top-level drawable of an object that can have a copy.
++            /// </summary>
++            public static bool CanCopy(DrawableHitObject drawable) => drawable.GetType() == typeof(DrawableHitCircle) || drawable.GetType() == typeof(DrawableSlider);
++
++            /// <param name="hitObject">The object (see <see cref="CanCopy(HitObject)"/>).</param>
++            /// <param name="liveTime">When the object's real drawable comes alive.</param>
++            /// <param name="appearTime">When all objects appear.</param>
++            /// <param name="mods">The play's mods, applied to the copy like to the playfield's drawables.</param>
++            public FrozenObject(OsuHitObject hitObject, double liveTime, double appearTime, IReadOnlyList<Mod> mods)
++            {
++                HitObject = hitObject;
++                this.mods = mods;
++
++                drawable = hitObject is Slider slider ? new DrawableSlider(slider) : new DrawableHitCircle((HitCircle)hitObject);
++
++                RelativeSizeAxes = Axes.Both;
++
++                // Earlier objects are drawn above later ones.
++                Depth = (float)hitObject.StartTime;
++
++                // Shown as of the moment the real drawable comes alive, but never mid fade-in (slider ticks settle 600 ms after appearing).
++                double frozenTime = Math.Max(liveTime, appearTime + 600);
++                Clock = new FramedClock(new ManualClock { CurrentTime = frozenTime, IsRunning = false });
++
++                // Same order as the playfield's pooled objects: mods first, then the object is applied (when loaded).
++                applyMods(drawable);
++
++                Child = drawable;
++            }
++
++            /// <summary>
++            /// Whether the copy has had its first update (when its nested objects get the mods and its state is applied again).
++            /// </summary>
++            public bool IsWarm => modsApplied;
++
++            /// <summary>
++            /// Gives the copy its first update now. It's the costly one (about half a millisecond for a slider: its path, nested objects
++            /// and their state), so the layer does this a few copies per frame before their page is drawn, instead of all of a page's
++            /// copies in the frame it's drawn.
++            /// </summary>
++            public void Warm()
++            {
++                if (!modsApplied)
++                    UpdateSubTree();
++            }
++
++            private void applyMods(DrawableHitObject d)
++            {
++                foreach (var mod in mods.OfType<IApplicableToDrawableHitObject>())
++                    mod.ApplyToDrawableHitObject(d);
++            }
++
++
++            protected override void UpdateAfterChildren()
++            {
++                base.UpdateAfterChildren();
++
++                if (modsApplied)
++                    return;
++
++                // Nested objects are created when the object is applied. They get the mods like pooled nested objects do, and
++                // their state is applied again so the mods take effect.
++                modsApplied = true;
++
++                foreach (var nested in drawable.NestedHitObjects)
++                {
++                    applyMods(nested);
++                    nested.RefreshStateTransforms();
++                }
++
++                drawable.RefreshStateTransforms();
++            }
++
++            /// <summary>
++            /// The area an object covers, in playfield coordinates (with a margin for skins that draw outside the circle).
++            /// </summary>
++            public static RectangleF ComputeBounds(OsuHitObject hitObject)
++            {
++                float radius = (float)(OsuHitObject.OBJECT_RADIUS * hitObject.Scale * 1.6);
++                Vector2 min = hitObject.StackedPosition;
++                Vector2 max = hitObject.StackedPosition;
++
++                if (hitObject is Slider slider)
++                {
++                    var path = new List<Vector2>();
++                    slider.Path.GetPathToProgress(path, 0, 1);
++
++                    foreach (var point in path)
++                    {
++                        Vector2 p = slider.StackedPosition + point;
++                        min = Vector2.ComponentMin(min, p);
++                        max = Vector2.ComponentMax(max, p);
++                    }
++                }
++
++                return new RectangleF(min.X - radius, min.Y - radius, max.X - min.X + radius * 2, max.Y - min.Y + radius * 2);
++            }
++        }
++    }
++}
+diff --git a/osu.Game.Rulesets.Osu/Objects/Drawables/DrawableOsuHitObject.cs b/osu.Game.Rulesets.Osu/Objects/Drawables/DrawableOsuHitObject.cs
+index 79dd8709f6..7573876b62 100644
+--- a/osu.Game.Rulesets.Osu/Objects/Drawables/DrawableOsuHitObject.cs
++++ b/osu.Game.Rulesets.Osu/Objects/Drawables/DrawableOsuHitObject.cs
+@@ -112,8 +112,17 @@ protected override void ClearNestedHitObjects()
+                 piece.ApplyCustomUpdateState -= applyDimToDrawableHitObject;
+         }
+ 
++        /// <summary>
++        /// Patchsu: whether pieces stay dimmed until the object can be hit. Patch 9's Mafham turns this off,
++        /// like McOsu does, because the brightening would show which objects come next.
++        /// </summary>
++        public bool DimUntilHittable { get; set; } = true;
++
+         private void applyDim(Drawable piece)
+         {
++            if (!DimUntilHittable)
++                return;
++
+             piece.FadeColour(new Color4(195, 195, 195, 255));
+             using (piece.BeginDelayedSequence(InitialLifetimeOffset - OsuHitWindows.MISS_WINDOW))
+                 piece.FadeColour(Color4.White, 100);
+diff --git a/osu.Game.Rulesets.Osu/UI/DrawableOsuRuleset.cs b/osu.Game.Rulesets.Osu/UI/DrawableOsuRuleset.cs
+index 12d5363469..6613fd8b75 100644
+--- a/osu.Game.Rulesets.Osu/UI/DrawableOsuRuleset.cs
++++ b/osu.Game.Rulesets.Osu/UI/DrawableOsuRuleset.cs
+@@ -83,10 +83,16 @@ public override double GameplayStartTime
+         {
+             get
+             {
++                double time = 0;
++
+                 if (Objects.FirstOrDefault() is OsuHitObject first)
+-                    return first.StartTime - Math.Max(2000, first.TimePreempt);
++                    time = first.StartTime - Math.Max(2000, first.TimePreempt);
++
++                // Patchsu: mods can lengthen the lead-in (patch 9).
++                foreach (var mod in Mods.OfType<IApplicableToGameplayStartTime>())
++                    time = mod.ApplyToGameplayStartTime(time, Beatmap, Mods);
+ 
+-                return 0;
++                return time;
+             }
+         }
+     }
+diff --git a/osu.Game/Beatmaps/Drawables/DifficultyIconTooltip.cs b/osu.Game/Beatmaps/Drawables/DifficultyIconTooltip.cs
+index 280185ba17..b0f44b30a5 100644
+--- a/osu.Game/Beatmaps/Drawables/DifficultyIconTooltip.cs
++++ b/osu.Game/Beatmaps/Drawables/DifficultyIconTooltip.cs
+@@ -125,7 +125,8 @@ public void SetContent(DifficultyIconTooltipContent content)
+                                            .Select(attr => new OsuSpriteText
+                                            {
+                                                Font = OsuFont.Style.Caption1,
+-                                               Text = $@"{attr.Acronym}: {attr.AdjustedValue:0.##}"
++                                               // Patchsu (patch 9): Mafham's approach rate is negative infinity.
++                                               Text = float.IsNegativeInfinity(attr.AdjustedValue) ? $@"{attr.Acronym}: −∞" : $@"{attr.Acronym}: {attr.AdjustedValue:0.##}"
+                                            });
+ 
+             difficultyFillFlowContainer.Clear();
+diff --git a/osu.Game/Overlays/Mods/AttributeExponentCounter.cs b/osu.Game/Overlays/Mods/AttributeExponentCounter.cs
+new file mode 100644
+index 0000000000..767cafd070
+--- /dev/null
++++ b/osu.Game/Overlays/Mods/AttributeExponentCounter.cs
+@@ -0,0 +1,52 @@
++// Added by Patchsu
++
++using System;
++using System.Globalization;
++using osu.Framework.Graphics.Sprites;
++using osu.Framework.Localisation;
++using osu.Game.Graphics.Sprites;
++using osu.Game.Graphics.UserInterface;
++
++namespace osu.Game.Overlays.Mods
++{
++    /// <summary>
++    /// Patchsu (patch 9): the small exponent after a beatmap attribute's value (Mafham's far objects brightness: −∞^.5).
++    /// Rolls from one value to the next like the value itself; 1 (or none) shows nothing.
++    /// </summary>
++    public partial class AttributeExponentCounter : RollingCounter<double>
++    {
++        private readonly FontUsage font;
++
++        protected override double RollingDuration => 250;
++
++        public AttributeExponentCounter(FontUsage font)
++        {
++            this.font = font;
++            Current.Value = 1;
++            DisplayedCount = 1;
++        }
++
++        /// <summary>
++        /// Sets the exponent to roll to (null: none).
++        /// </summary>
++        public void SetExponent(float? exponent) => Current.Value = exponent ?? 1;
++
++        public override double DisplayedCount
++        {
++            get => base.DisplayedCount;
++            set
++            {
++                base.DisplayedCount = value;
++                // Hidden (and out of the parent's layout) while there's nothing to show.
++                Alpha = isShown(value) ? 1 : 0;
++            }
++        }
++
++        protected override LocalisableString FormatCount(double count)
++            => isShown(count) ? $@"^{count.ToString(@"#.##", CultureInfo.InvariantCulture)}" : string.Empty;
++
++        private static bool isShown(double count) => Math.Round(count, 2) < 1;
++
++        protected override OsuSpriteText CreateSpriteText() => new OsuSpriteText { Font = font };
++    }
++}
+diff --git a/osu.Game/Overlays/Mods/BeatmapAttributeTooltip.cs b/osu.Game/Overlays/Mods/BeatmapAttributeTooltip.cs
+index 2667b6885b..efba6bc96e 100644
+--- a/osu.Game/Overlays/Mods/BeatmapAttributeTooltip.cs
++++ b/osu.Game/Overlays/Mods/BeatmapAttributeTooltip.cs
+@@ -127,7 +127,10 @@ private void updateDisplay()
+ 
+                 if (!Precision.AlmostEquals(attribute.OriginalValue, attribute.AdjustedValue))
+                 {
+-                    adjustedByModsText.Text = SongSelectStrings.ThisValueIsBeingAdjustedByMods(attribute.OriginalValue, attribute.AdjustedValue);
++                    // Patchsu (patch 9): Mafham's approach rate is negative infinity (.NET would write "-Infinity").
++                    adjustedByModsText.Text = float.IsNegativeInfinity(attribute.AdjustedValue)
++                        ? $@"This value is being adjusted by mods ({attribute.OriginalValue:0.0#} → −∞)."
++                        : SongSelectStrings.ThisValueIsBeingAdjustedByMods(attribute.OriginalValue, attribute.AdjustedValue);
+                     adjustedByModsText.Alpha = 1;
+                     shouldShow = true;
+                 }
+diff --git a/osu.Game/Overlays/Mods/McOsuModPlaque.cs b/osu.Game/Overlays/Mods/McOsuModPlaque.cs
+new file mode 100644
+index 0000000000..f918009b8a
+--- /dev/null
++++ b/osu.Game/Overlays/Mods/McOsuModPlaque.cs
+@@ -0,0 +1,83 @@
++// Added by Patchsu
++
++using osu.Framework.Bindables;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Containers;
++using osu.Framework.Graphics.Shapes;
++using osu.Game.Graphics;
++using osu.Game.Graphics.Sprites;
++using osu.Game.Rulesets.Mods;
++using osuTK;
++using osuTK.Graphics;
++
++namespace osu.Game.Overlays.Mods
++{
++    /// <summary>
++    /// The "from McOsu" plaque in the top-right corner of a mod panel (Patchsu patch 9), like patch 3's "from Modosu" one.
++    /// </summary>
++    public static class McOsuModPlaque
++    {
++        private static readonly Color4 mcosu_green = new Color4(140, 220, 110, 255);
++        private static readonly Color4 mcosu_badge_active = new Color4(30, 60, 25, 255);
++
++        private const double transition_duration = 150;
++
++        public static void TryAttach(Mod mod, Container target, IBindable<bool> active)
++        {
++            if (mod is not IMcOsuMod)
++                return;
++
++            // The same white "M" circle as patch 3's "from Modosu" plaque.
++            var icon = new Container
++            {
++                Size = new Vector2(9),
++                Anchor = Anchor.CentreLeft,
++                Origin = Anchor.CentreLeft,
++                Children = new Drawable[]
++                {
++                    new Circle
++                    {
++                        RelativeSizeAxes = Axes.Both,
++                        Colour = Color4.White,
++                    },
++                    new OsuSpriteText
++                    {
++                        Anchor = Anchor.Centre,
++                        Origin = Anchor.Centre,
++                        Colour = Color4.Black,
++                        Text = "M",
++                        Font = OsuFont.Default.With(size: 7, weight: FontWeight.Bold)
++                    }
++                }
++            };
++
++            var text = new OsuSpriteText
++            {
++                Text = "from McOsu",
++                Font = OsuFont.Default.With(size: 9, weight: FontWeight.SemiBold),
++                Colour = mcosu_green,
++                Anchor = Anchor.CentreLeft,
++                Origin = Anchor.CentreLeft,
++            };
++
++            target.Add(new Container
++            {
++                Anchor = Anchor.TopRight,
++                Origin = Anchor.TopRight,
++                AutoSizeAxes = Axes.Both,
++                Margin = new MarginPadding { Right = 6, Top = 5 },
++                Shear = -OsuGame.SHEAR,
++                Child = new FillFlowContainer
++                {
++                    AutoSizeAxes = Axes.Both,
++                    Direction = FillDirection.Horizontal,
++                    Spacing = new Vector2(3, 0),
++                    Children = new Drawable[] { icon, text },
++                },
++            });
++
++            // Bind to the panel's own Active: a GetBoundCopy() is only weakly referenced, gets garbage collected and the colour then stops following selection.
++            active.BindValueChanged(a => text.FadeColour(a.NewValue ? mcosu_badge_active : mcosu_green, transition_duration, Easing.OutQuint), true);
++        }
++    }
++}
+diff --git a/osu.Game/Overlays/Mods/ModPanel.cs b/osu.Game/Overlays/Mods/ModPanel.cs
+index df72692f48..5c1c1264c5 100644
+--- a/osu.Game/Overlays/Mods/ModPanel.cs
++++ b/osu.Game/Overlays/Mods/ModPanel.cs
+@@ -40,6 +40,9 @@ public ModPanel(ModState modState)
+                 Shear = -OsuGame.SHEAR,
+                 Scale = new Vector2(HEIGHT / ModSwitchSmall.DEFAULT_SIZE)
+             };
++
++            // Patchsu (patch 9): "from McOsu" plaque.
++            McOsuModPlaque.TryAttach(Mod, MainContentContainer, Active);
+         }
+ 
+         public ModPanel(Mod mod)
+diff --git a/osu.Game/Overlays/Mods/VerticalAttributeDisplay.cs b/osu.Game/Overlays/Mods/VerticalAttributeDisplay.cs
+index 977da67e31..a16e44f1b9 100644
+--- a/osu.Game/Overlays/Mods/VerticalAttributeDisplay.cs
++++ b/osu.Game/Overlays/Mods/VerticalAttributeDisplay.cs
+@@ -34,6 +34,7 @@ public LocalisableString Label
+ 
+         private readonly EffectCounter counter;
+         private readonly OsuSpriteText text;
++        private readonly AttributeExponentCounter exponentCounter;
+ 
+         [Resolved]
+         private OsuColour colours { get; set; } = null!;
+@@ -61,11 +62,26 @@ public VerticalAttributeDisplay()
+                         Anchor = Anchor.Centre,
+                         Font = OsuFont.Default.With(size: 20, weight: FontWeight.Bold)
+                     },
+-                    counter = new EffectCounter
++                    new Container
+                     {
+                         Origin = Anchor.Centre,
+                         Anchor = Anchor.Centre,
+-                        Current = { BindTarget = current },
++                        AutoSizeAxes = Axes.Both,
++                        Children = new Drawable[]
++                        {
++                            counter = new EffectCounter
++                            {
++                                Current = { BindTarget = current },
++                            },
++                            // Patchsu (patch 9): a small exponent after the value (Mafham's far objects brightness), outside the centred width.
++                            exponentCounter = new AttributeExponentCounter(OsuFont.Default.With(size: 11, weight: FontWeight.SemiBold))
++                            {
++                                Anchor = Anchor.TopRight,
++                                Origin = Anchor.TopLeft,
++                                BypassAutoSizeAxes = Axes.Both,
++                                Y = -3,
++                            },
++                        }
+                     }
+                 }
+             };
+@@ -77,6 +93,7 @@ public void SetAttribute(RulesetBeatmapAttribute? attribute)
+             {
+                 text.Text = attribute.Acronym;
+                 current.Value = attribute.AdjustedValue;
++                exponentCounter.SetExponent(attribute.ValueExponent);
+                 var effect = calculateEffect(attribute.OriginalValue, attribute.AdjustedValue);
+                 updateTextColor(effect);
+                 Alpha = 1;
+@@ -121,6 +138,7 @@ private void updateTextColor(ModEffect effect)
+ 
+             text.Colour = newColor;
+             counter.Colour = newColor;
++            exponentCounter.Colour = newColor;
+         }
+ 
+         public enum ModEffect
+@@ -134,7 +152,20 @@ private partial class EffectCounter : RollingCounter<double>
+         {
+             protected override double RollingDuration => 250;
+ 
+-            protected override LocalisableString FormatCount(double count) => count.ToLocalisableString("0.0#");
++            // Patchsu (patch 9): Mafham's approach rate (.NET would write "-Infinity").
++            protected override LocalisableString FormatCount(double count) => double.IsNegativeInfinity(count) ? "−∞" : count.ToLocalisableString("0.0#");
++
++            protected override void TransformCount(double currentValue, double newValue)
++            {
++                // Patchsu (patch 9): an infinite value (Mafham's approach rate) can't be rolled to or from.
++                if (!double.IsFinite(currentValue) || !double.IsFinite(newValue))
++                {
++                    StopRolling();
++                    return;
++                }
++
++                base.TransformCount(currentValue, newValue);
++            }
+ 
+             protected override OsuSpriteText CreateSpriteText() => new OsuSpriteText
+             {
+diff --git a/osu.Game/Rulesets/Difficulty/RulesetBeatmapAttribute.cs b/osu.Game/Rulesets/Difficulty/RulesetBeatmapAttribute.cs
+index c04c84f678..73ca67200c 100644
+--- a/osu.Game/Rulesets/Difficulty/RulesetBeatmapAttribute.cs
++++ b/osu.Game/Rulesets/Difficulty/RulesetBeatmapAttribute.cs
+@@ -58,6 +58,12 @@ public class RulesetBeatmapAttribute
+         /// </summary>
+         public string ValueFormat { get; init; } = string.Empty;
+ 
++        /// <summary>
++        /// Patchsu (patch 9): an optional small exponent written after the adjusted value
++        /// (Mafham's approach rate shows its far objects brightness: −∞^.5).
++        /// </summary>
++        public float? ValueExponent { get; init; }
++
+         public RulesetBeatmapAttribute(LocalisableString label, string acronym, float originalValue, float adjustedValue, float maxValue)
+         {
+             Label = label;
+diff --git a/osu.Game/Rulesets/Judgements/ExtraJudgement.cs b/osu.Game/Rulesets/Judgements/ExtraJudgement.cs
+new file mode 100644
+index 0000000000..b701a82c50
+--- /dev/null
++++ b/osu.Game/Rulesets/Judgements/ExtraJudgement.cs
+@@ -0,0 +1,20 @@
++// Added by Patchsu
++
++using osu.Game.Rulesets.Scoring;
++
++namespace osu.Game.Rulesets.Judgements
++{
++    /// <summary>
++    /// Patchsu: a judgement that isn't part of the beatmap, added on top of it during play
++    /// (patch 9: Click Control's miss for an unnecessary click).
++    /// </summary>
++    /// <remarks>
++    /// Its results are scored like any other (combo, accuracy, health, statistics), but they don't count towards
++    /// <see cref="JudgementProcessor.JudgedHits"/>, so they can't end the map early or keep it from ending.
++    /// The beatmap's maximum statistics (and so its maximum combo) come from the autoplay simulation and stay as they are.
++    /// </remarks>
++    public class ExtraJudgement : Judgement
++    {
++        public override HitResult MaxResult => HitResult.Great;
++    }
++}
+diff --git a/osu.Game/Rulesets/Mods/IApplicableToGameplayStartTime.cs b/osu.Game/Rulesets/Mods/IApplicableToGameplayStartTime.cs
+new file mode 100644
+index 0000000000..6f6bce4a87
+--- /dev/null
++++ b/osu.Game/Rulesets/Mods/IApplicableToGameplayStartTime.cs
+@@ -0,0 +1,20 @@
++// Added by Patchsu
++
++using System.Collections.Generic;
++using osu.Game.Beatmaps;
++
++namespace osu.Game.Rulesets.Mods
++{
++    /// <summary>
++    /// Patchsu: a mod that changes when gameplay starts (the lead-in before the first object).
++    /// Used by patch 9's Mafham, which needs a few seconds to draw the whole map before it appears.
++    /// </summary>
++    public interface IApplicableToGameplayStartTime : IApplicableMod
++    {
++        /// <param name="gameplayStartTime">The time gameplay would start at.</param>
++        /// <param name="beatmap">The playable beatmap.</param>
++        /// <param name="mods">The play's mods.</param>
++        /// <returns>The time gameplay starts at.</returns>
++        double ApplyToGameplayStartTime(double gameplayStartTime, IBeatmap beatmap, IReadOnlyList<Mod> mods);
++    }
++}
+diff --git a/osu.Game/Rulesets/Mods/IMcOsuMod.cs b/osu.Game/Rulesets/Mods/IMcOsuMod.cs
+new file mode 100644
+index 0000000000..116a93876c
+--- /dev/null
++++ b/osu.Game/Rulesets/Mods/IMcOsuMod.cs
+@@ -0,0 +1,11 @@
++// Added by Patchsu
++
++namespace osu.Game.Rulesets.Mods
++{
++    /// <summary>
++    /// Patchsu (patch 9): marks a mod ported from McOsu. Mod select shows a "from McOsu" plaque on it.
++    /// </summary>
++    public interface IMcOsuMod
++    {
++    }
++}
+diff --git a/osu.Game/Rulesets/Objects/Drawables/DrawableHitObject.cs b/osu.Game/Rulesets/Objects/Drawables/DrawableHitObject.cs
+index a012c34e26..ea2ca11912 100644
+--- a/osu.Game/Rulesets/Objects/Drawables/DrawableHitObject.cs
++++ b/osu.Game/Rulesets/Objects/Drawables/DrawableHitObject.cs
+@@ -802,6 +802,10 @@ protected override void Dispose(bool isDisposing)
+             if (HitObject != null)
+                 HitObject.DefaultsApplied -= onDefaultsApplied;
+ 
++            // Patchsu: an entry made for a non-pooled drawable belongs to it alone; the hit object mustn't keep it (and so this drawable) alive.
++            if (Entry is SyntheticHitObjectEntry syntheticEntry)
++                syntheticEntry.StopFollowingHitObject();
++
+             if (CurrentSkin != null)
+                 CurrentSkin.SourceChanged -= skinSourceChanged;
+ 
+diff --git a/osu.Game/Rulesets/Objects/HitObjectLifetimeEntry.cs b/osu.Game/Rulesets/Objects/HitObjectLifetimeEntry.cs
+index 4962ac13b5..7657311cfa 100644
+--- a/osu.Game/Rulesets/Objects/HitObjectLifetimeEntry.cs
++++ b/osu.Game/Rulesets/Objects/HitObjectLifetimeEntry.cs
+@@ -74,7 +74,20 @@ public HitObjectLifetimeEntry(HitObject hitObject)
+ 
+             // Subscribe to this event before the DrawableHitObject so that the local callback is invoked before the entry is re-applied as a result of DefaultsApplied.
+             // This way, the DrawableHitObject can use OnApply() to overwrite the LifetimeStart that was set inside setInitialLifetime().
+-            HitObject.DefaultsApplied += _ => SetInitialLifetime();
++            HitObject.DefaultsApplied += onDefaultsApplied;
++        }
++
++        private void onDefaultsApplied(HitObject _) => SetInitialLifetime();
++
++        /// <summary>
++        /// Patchsu: stops following the <see cref="HitObject"/>. Without this, the hit object keeps the entry (and the drawable using it)
++        /// alive for as long as the hit object lives. Used for the entries of non-pooled drawables (see <see cref="SyntheticHitObjectEntry"/>)
++        /// when they're disposed, e.g. patch 9 Mafham's frozen copies, which use the gameplay beatmap's hit objects.
++        /// </summary>
++        internal void StopFollowingHitObject()
++        {
++            HitObject.DefaultsApplied -= onDefaultsApplied;
++            startTimeBindable.UnbindAll();
+         }
+ 
+         // The lifetime, as set by the hitobject.
+diff --git a/osu.Game/Rulesets/Scoring/JudgementProcessor.cs b/osu.Game/Rulesets/Scoring/JudgementProcessor.cs
+index 0e90330651..9f2040acb4 100644
+--- a/osu.Game/Rulesets/Scoring/JudgementProcessor.cs
++++ b/osu.Game/Rulesets/Scoring/JudgementProcessor.cs
+@@ -72,8 +72,13 @@ public void ApplyResult(JudgementResult result)
+                 throw new ArgumentException(@$"A {nameof(HitResult.LegacyComboIncrease)} hit result cannot be applied.");
+ #pragma warning restore CS0618
+ 
+-            JudgedHits++;
+-            lastAppliedResult = result;
++            // Patchsu: extra results (patch 9's Click Control misses) are scored, but they aren't beatmap objects,
++            // so they mustn't count towards the judged object count that decides when the map is complete.
++            if (result.Judgement is not ExtraJudgement)
++            {
++                JudgedHits++;
++                lastAppliedResult = result;
++            }
+ 
+             ApplyResultInternal(result);
+ 
+@@ -86,7 +91,8 @@ public void ApplyResult(JudgementResult result)
+         /// <param name="result">The judgement scoring result.</param>
+         public void RevertResult(JudgementResult result)
+         {
+-            JudgedHits--;
++            if (result.Judgement is not ExtraJudgement)
++                JudgedHits--;
+ 
+             RevertResultInternal(result);
+ 
+diff --git a/osu.Game/Rulesets/Scoring/ScoreProcessor.cs b/osu.Game/Rulesets/Scoring/ScoreProcessor.cs
+index 0dbb5b2000..410ab21511 100644
+--- a/osu.Game/Rulesets/Scoring/ScoreProcessor.cs
++++ b/osu.Game/Rulesets/Scoring/ScoreProcessor.cs
+@@ -277,7 +277,10 @@ protected sealed override void ApplyResultInternal(JudgementResult result)
+                 if (TrackHitEvents)
+                 {
+                     hitEvents.Add(CreateHitEvent(result));
+-                    lastHitObject = result.HitObject;
++
++                    // Patchsu: an extra result has no place in the beatmap, so the next object's hit event keeps the real previous object.
++                    if (result.Judgement is not ExtraJudgement)
++                        lastHitObject = result.HitObject;
+                 }
+ 
+                 updateScore();
+diff --git a/osu.Game/Screens/Select/BeatmapTitleWedge.StatisticDifficulty.cs b/osu.Game/Screens/Select/BeatmapTitleWedge.StatisticDifficulty.cs
+index 3133f8a67b..30901402ca 100644
+--- a/osu.Game/Screens/Select/BeatmapTitleWedge.StatisticDifficulty.cs
++++ b/osu.Game/Screens/Select/BeatmapTitleWedge.StatisticDifficulty.cs
+@@ -45,6 +45,7 @@ public Data Value
+             private readonly Circle adjustedBar;
+             private readonly OsuSpriteText labelText;
+             private readonly OsuSpriteText valueText;
++            private readonly AttributeExponentCounter valueExponentCounter;
+             private readonly SpriteIcon valueIcon;
+             private readonly Container bars;
+ 
+@@ -119,6 +120,13 @@ public StatisticDifficulty()
+                                     Origin = Anchor.CentreLeft,
+                                     Font = OsuFont.Style.Body,
+                                 },
++                                // Patchsu (patch 9): a small exponent after the value (Mafham's far objects brightness).
++                                valueExponentCounter = new AttributeExponentCounter(OsuFont.Style.Caption2.With(weight: FontWeight.SemiBold))
++                                {
++                                    Anchor = Anchor.CentreLeft,
++                                    Origin = Anchor.CentreLeft,
++                                    Margin = new MarginPadding { Top = -7f, Left = 1 },
++                                },
+                                 valueIcon = new SpriteIcon
+                                 {
+                                     Anchor = Anchor.CentreLeft,
+@@ -141,6 +149,7 @@ private void load(OverlayColourProvider colourProvider)
+             {
+                 labelText.Colour = colourProvider.Content2;
+                 valueText.Colour = colourProvider.Content1;
++                valueExponentCounter.Colour = colourProvider.Content1;
+             }
+ 
+             protected override void LoadComplete()
+@@ -155,7 +164,9 @@ private void updateDisplay()
+                 adjustedBar.ResizeWidthTo(value.Maximum == 0 ? 0 : Math.Clamp(value.AdjustedValue / value.Maximum, 0, 1), 300, Easing.OutQuint);
+ 
+                 labelText.Text = value.Label;
+-                valueText.Text = value.Content ?? value.AdjustedValue.ToLocalisableString("0.##");
++                // Patchsu (patch 9): Mafham's approach rate is negative infinity (.NET would write "-Infinity").
++                valueText.Text = value.Content ?? (float.IsNegativeInfinity(value.AdjustedValue) ? "−∞" : value.AdjustedValue.ToLocalisableString("0.##"));
++                valueExponentCounter.SetExponent(value.BeatmapAttribute?.ValueExponent);
+ 
+                 if (value.Value == value.AdjustedValue)
+                 {
+@@ -163,6 +174,7 @@ private void updateDisplay()
+                     bar.FadeIn(300, Easing.OutQuint);
+ 
+                     valueText.FadeColour(Color4.White, 300, Easing.OutQuint);
++                    valueExponentCounter.FadeColour(Color4.White, 300, Easing.OutQuint);
+                     valueIcon.Hide();
+                 }
+                 else
+@@ -176,6 +188,7 @@ private void updateDisplay()
+                         adjustedBar.FadeColour(ColourInfo.GradientHorizontal(Color4.Black, colours.Red1), 300, Easing.OutQuint);
+ 
+                         valueText.FadeColour(colours.Red1, 300, Easing.OutQuint);
++                        valueExponentCounter.FadeColour(colours.Red1, 300, Easing.OutQuint);
+                         valueIcon.Show();
+                         valueIcon.Colour = colours.Red1;
+                         valueIcon.Icon = FontAwesome.Solid.SortUp;
+@@ -187,6 +200,7 @@ private void updateDisplay()
+                         adjustedBar.FadeColour(colours.Lime1, 300, Easing.OutQuint);
+ 
+                         valueText.FadeColour(colours.Lime1, 300, Easing.OutQuint);
++                        valueExponentCounter.FadeColour(colours.Lime1, 300, Easing.OutQuint);
+                         valueIcon.Show();
+                         valueIcon.Colour = colours.Lime1;
+                         valueIcon.Icon = FontAwesome.Solid.SortDown;
+diff --git a/osu.Game.Rulesets.Osu/OsuRuleset.cs b/osu.Game.Rulesets.Osu/OsuRuleset.cs
+index 79c34abe69..eab7491e17 100644
+--- a/osu.Game.Rulesets.Osu/OsuRuleset.cs
++++ b/osu.Game.Rulesets.Osu/OsuRuleset.cs
+@@ -201,3 +201,4 @@ public override IEnumerable<Mod> GetModsFor(ModType type)
++                        new OsuModClickControl(),
+                     };
+ 
+                 case ModType.Conversion:
+@@ -242,3 +243,4 @@ public override IEnumerable<Mod> GetModsFor(ModType type)
++                        new OsuModMafham(),
+                     };
+ 
+                 case ModType.System:
+@@ -419,6 +421,10 @@ public override BeatmapDifficulty GetAdjustedDisplayDifficulty(IBeatmapInfo diff
+             preempt /= rate;
+             adjustedDifficulty.ApproachRate = (float)IBeatmapDifficultyInfo.InverseDifficultyRange(preempt, OsuHitObject.PREEMPT_MAX, OsuHitObject.PREEMPT_MID, OsuHitObject.PREEMPT_MIN);
+ 
++            // Patchsu (patch 9): Mafham's approach rate is negative infinity. Only shown: this is never used for calculations.
++            if (mods.Any(m => m is OsuModMafham))
++                adjustedDifficulty.ApproachRate = float.NegativeInfinity;
++
+             double greatHitWindow = IBeatmapDifficultyInfo.DifficultyRange(adjustedDifficulty.OverallDifficulty, OsuHitWindows.GREAT_WINDOW_RANGE);
+             greatHitWindow /= rate;
+             adjustedDifficulty.OverallDifficulty = (float)IBeatmapDifficultyInfo.InverseDifficultyRange(greatHitWindow, OsuHitWindows.GREAT_WINDOW_RANGE);
+@@ -451,10 +457,16 @@ public override IEnumerable<RulesetBeatmapAttribute> GetBeatmapAttributesForDisp
+             yield return new RulesetBeatmapAttribute(SongSelectStrings.ApproachRate, @"AR", originalDifficulty.ApproachRate, effectiveDifficulty.ApproachRate, 10)
+             {
+                 Description = OsuRulesetStrings.ApproachRateDescription,
++                // Patchsu (patch 9): Mafham's far objects brightness, written as an exponent of −∞ (none at 100%).
++                ValueExponent = mods.OfType<OsuModMafham>().FirstOrDefault() is OsuModMafham mafham && mafham.FarObjectBrightness.Value < 1
++                    ? mafham.FarObjectBrightness.Value
++                    : null,
+                 AdditionalMetrics =
+                 [
+                     new RulesetBeatmapAttribute.AdditionalMetric(OsuRulesetStrings.ApproachTime,
+-                        LocalisableString.Interpolate($@"{IBeatmapDifficultyInfo.DifficultyRangeInt(effectiveDifficulty.ApproachRate, OsuHitObject.PREEMPT_RANGE):#,0.##} ms"))
++                        float.IsNegativeInfinity(effectiveDifficulty.ApproachRate) // Patchsu (patch 9): Mafham
++                            ? @"∞ ms"
++                            : LocalisableString.Interpolate($@"{IBeatmapDifficultyInfo.DifficultyRangeInt(effectiveDifficulty.ApproachRate, OsuHitObject.PREEMPT_RANGE):#,0.##} ms"))
+                 ]
+             };
+ 

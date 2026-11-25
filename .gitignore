@@ -1,0 +1,32 @@
+# Local only: Ritsu port workspace (never part of this repository)
+/Ritsu/
+
+# Agent / editor settings
+/.claude/
+.vscode/
+.idea/
+*.swp
+
+# Local history and scratch inside Patchsu/
+/Patchsu/archive/
+/Patchsu/versions/
+/Patchsu/build-patchsu-version.sh
+/Patchsu/build-patchsu-version.cmd
+/Patchsu/github readme.md
+/Patchsu/Patchsu-CLI
+/Patchsu/Patchsu-CLI.exe
+
+# Patchsu/work: clones and builds stay local, test files and the review are tracked
+/Patchsu/work/*
+!/Patchsu/work/*-tests/
+!/Patchsu/work/notes/
+/Patchsu/work/notes/*
+!/Patchsu/work/notes/patch-optimisation-review.md
+/Patchsu/work/*-tests/*.log
+
+# One-off helper scripts; only merge_sections.py is shared
+/tools/*
+!/tools/merge_sections.py
+
+# Patchsu patches that should not be present publically just yet
+/Patchsu/patches/01*.patch

@@ -1,0 +1,347 @@
+Patchsu patch 1 of 2: online restrictions (made against osu! commit 8cb6e6e68d). Only cuts online access; nothing else.
+
+- Only read-only requests reach osu! servers (allow-list inside APIRequest): logging in, beatmaps (lookup / search / download),
+  beatmap tags, leaderboards, player profiles and replay downloads. Everything else fails before touching the network.
+- No score submission, no chat / notifications / spectator / multiplayer / presence connections, no crash reports,
+  no update checks, no account creation.
+- Menus: news, changelog, wiki, rankings, chat and social buttons and multiplayer / playlists / daily challenge are removed.
+
+Applies and builds on its own. Apply 0002 on top for local profiles.
+
+Also holds the empty Settings → "Patchsu" tab (LocalPriority/PatchSettings.cs: LocalPrioritySection + PatchSettingsSubsection),
+so any patch can add its "Patch N. …" subsection without needing 0002. The tab only shows when an applied patch has one.
+
+Also gives osu!'s last Fun mod (Bloom) a trailing comma in OsuRuleset.GetModsFor, so the mod patches (0003, 0004, 0009)
+can each add their mods at the end of the list without conflicting with each other.
+
+diff --git a/osu.Desktop/OsuGameDesktop.cs b/osu.Desktop/OsuGameDesktop.cs
+index 0aac501ea0..b71c0110c9 100644
+--- a/osu.Desktop/OsuGameDesktop.cs
++++ b/osu.Desktop/OsuGameDesktop.cs
+@@ -116,10 +116,8 @@ protected override UpdateManager CreateUpdateManager()
+             if (IsFirstRun)
+                 LocalConfig.SetValue(OsuSetting.ReleaseStream, Version.Contains("-tachyon") ? ReleaseStream.Tachyon : ReleaseStream.Lazer);
+ 
+-            if (IsPackageManaged)
+-                return new NoActionUpdateManager();
+-
+-            return new VelopackUpdateManager();
++            // Patched: no online update checks (an official update would replace this build).
++            return new NoActionUpdateManager();
+         }
+ 
+         public override bool RestartAppWhenExited()
+diff --git a/osu.Game.Rulesets.Osu/OsuRuleset.cs b/osu.Game.Rulesets.Osu/OsuRuleset.cs
+index 5b37417499..79c34abe69 100644
+--- a/osu.Game.Rulesets.Osu/OsuRuleset.cs
++++ b/osu.Game.Rulesets.Osu/OsuRuleset.cs
+@@ -238,7 +238,7 @@ public override IEnumerable<Mod> GetModsFor(ModType type)
+                         new OsuModBubbles(),
+                         new OsuModSynesthesia(),
+                         new OsuModDepth(),
+-                        new OsuModBloom()
++                        new OsuModBloom(),
+                     };
+ 
+                 case ModType.System:
+diff --git a/osu.Game/LocalPriority/PatchSettings.cs b/osu.Game/LocalPriority/PatchSettings.cs
+new file mode 100644
+index 0000000000..27c235ee36
+--- /dev/null
++++ b/osu.Game/LocalPriority/PatchSettings.cs
+@@ -0,0 +1,64 @@
++// Added by Patchsu
++
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Sprites;
++using osu.Framework.Localisation;
++using osu.Game.Overlays.Settings;
++
++namespace osu.Game.LocalPriority
++{
++    /// <summary>
++    /// Settings → "Patchsu" (its own tab, right under Online). Every patch with settings adds its own "Patch N. …" subsection
++    /// (a <see cref="PatchSettingsSubsection"/> in one of its own files), so no patch has to edit this list.
++    /// They are shown in patch order. The tab is only added when at least one patch has settings.
++    /// </summary>
++    public partial class LocalPrioritySection : SettingsSection
++    {
++        private static readonly Type[] subsection_types = typeof(LocalPrioritySection).Assembly.GetTypes()
++                                                                                       .Where(t => t.IsSubclassOf(typeof(PatchSettingsSubsection)) && !t.IsAbstract)
++                                                                                       .ToArray();
++
++        /// <summary>
++        /// Whether any applied patch has settings here.
++        /// </summary>
++        public static bool HasSubsections => subsection_types.Length > 0;
++
++        public override LocalisableString Header => @"Patchsu";
++
++        public override IEnumerable<LocalisableString> FilterTerms => base.FilterTerms.Concat(new LocalisableString[] { @"local", @"offline", @"profile", @"patch" });
++
++        public override Drawable CreateIcon() => new SpriteIcon
++        {
++            Icon = FontAwesome.Solid.UserShield,
++        };
++
++        public LocalPrioritySection()
++        {
++            Children = subsection_types.Select(t => (PatchSettingsSubsection)Activator.CreateInstance(t)!)
++                                       .OrderBy(s => s.PatchNumber)
++                                       .ToArray();
++        }
++    }
++
++    /// <summary>
++    /// The subsection of Settings → Patchsu that belongs to one patch file, titled "Patch N. Summary".
++    /// Settings → Patchsu finds every subclass by itself, so a subclass only needs a public parameterless constructor.
++    /// </summary>
++    public abstract partial class PatchSettingsSubsection : SettingsSubsection
++    {
++        /// <summary>
++        /// The number of the patch file (0002 → 2).
++        /// </summary>
++        public abstract int PatchNumber { get; }
++
++        /// <summary>
++        /// What the patch does, in a few words.
++        /// </summary>
++        protected abstract string Summary { get; }
++
++        protected sealed override LocalisableString Header => $@"Patch {PatchNumber}. {Summary}";
++    }
++}
+diff --git a/osu.Game/Online/API/APIAccess.cs b/osu.Game/Online/API/APIAccess.cs
+index 1d9f07617e..19f20b1567 100644
+--- a/osu.Game/Online/API/APIAccess.cs
++++ b/osu.Game/Online/API/APIAccess.cs
+@@ -498,10 +498,16 @@ public IHubClientConnector GetHubConnector(string clientName, string endpoint) =
+ 
+         public IChatClient GetChatClient() => new WebSocketChatClient(this);
+ 
++        private static readonly bool account_creation_stripped = true;
++
+         public RegistrationRequest.RegistrationRequestErrors CreateAccount(string email, string username, string password)
+         {
+             Debug.Assert(State.Value == APIState.Offline);
+ 
++            // Patched: no account creation (it would send data to osu! servers).
++            if (account_creation_stripped)
++                return new RegistrationRequest.RegistrationRequestErrors { Message = @"Account creation is disabled in this build. Please register on the osu! website instead." };
++
+             var req = new RegistrationRequest
+             {
+                 Url = $@"{Endpoints.APIUrl}/users",
+diff --git a/osu.Game/Online/API/APIRequest.cs b/osu.Game/Online/API/APIRequest.cs
+index 38b0ec7b89..df2044d2ab 100644
+--- a/osu.Game/Online/API/APIRequest.cs
++++ b/osu.Game/Online/API/APIRequest.cs
+@@ -68,6 +68,40 @@ internal void TriggerSuccess(T result)
+     /// </summary>
+     public abstract class APIRequest
+     {
++        /// <summary>
++        /// Patched: the only requests that may reach osu! servers. All of them only read data
++        /// (logging in, beatmaps and their downloads, beatmap tags, leaderboards, player profiles, replay downloads).
++        /// Everything else (score submission, chat, friends, favourites, votes, settings sync, multiplayer...) is refused.
++        /// </summary>
++        private static readonly System.Collections.Generic.HashSet<Type> allowed_requests = new System.Collections.Generic.HashSet<Type>
++        {
++            typeof(Requests.GetMeRequest),
++            typeof(Requests.VerifySessionRequest),
++            typeof(Requests.ReissueVerificationCodeRequest),
++            typeof(Requests.VerificationMailFallbackRequest),
++            typeof(Requests.GetBeatmapRequest),
++            typeof(Requests.GetBeatmapsRequest),
++            typeof(Requests.GetBeatmapSetRequest),
++            typeof(Requests.SearchBeatmapSetsRequest),
++            typeof(Requests.DownloadBeatmapSetRequest),
++            typeof(Requests.ListTagsRequest),
++            typeof(Requests.GetScoresRequest),
++            typeof(Requests.GetUserRequest),
++            typeof(Requests.GetUsersRequest),
++            typeof(Requests.LookupUsersRequest),
++            typeof(Requests.GetUserScoresRequest),
++            typeof(Requests.GetUserBeatmapsRequest),
++            typeof(Requests.GetUserMostPlayedBeatmapsRequest),
++            typeof(Requests.GetUserRecentActivitiesRequest),
++            typeof(Requests.GetUserKudosuHistoryRequest),
++            typeof(Requests.DownloadReplayRequest),
++        };
++
++        /// <summary>
++        /// Patched: whether this request may be performed.
++        /// </summary>
++        public bool IsAllowedOnline => allowed_requests.Contains(GetType());
++
+         protected abstract string Target { get; }
+ 
+         protected virtual WebRequest CreateWebRequest() => new OsuWebRequest(Uri);
+@@ -126,6 +160,13 @@ public void Perform()
+                 return;
+             }
+ 
++            // Patched: requests that aren't allowed fail right here, before touching the network.
++            if (!IsAllowedOnline)
++            {
++                Fail(new InvalidOperationException($@"{GetType().ReadableName()} is not allowed in this build."));
++                return;
++            }
++
+             User = API.LocalUser.Value;
+ 
+             if (isFailing) return;
+diff --git a/osu.Game/Online/PersistentEndpointClientConnector.cs b/osu.Game/Online/PersistentEndpointClientConnector.cs
+index 64c5cc3ecf..6a15264711 100644
+--- a/osu.Game/Online/PersistentEndpointClientConnector.cs
++++ b/osu.Game/Online/PersistentEndpointClientConnector.cs
+@@ -56,12 +56,24 @@ public void Start()
+             if (started)
+                 return;
+ 
++            // Patched: chat, notifications, spectator, multiplayer and presence connections are never opened.
++            if (persistent_connections_stripped)
++            {
++                started = true;
++                return;
++            }
++
+             apiState.BindValueChanged(_ => Task.Run(connectIfPossible), true);
+             started = true;
+         }
+ 
++        private static readonly bool persistent_connections_stripped = true;
++
+         public Task Reconnect()
+         {
++            if (persistent_connections_stripped)
++                return Task.CompletedTask;
++
+             Logger.Log($"{ClientName} reconnecting...", LoggingTarget.Network);
+             return Task.Run(connectIfPossible);
+         }
+diff --git a/osu.Game/OsuGameBase.cs b/osu.Game/OsuGameBase.cs
+index 6119640b2c..a5e1f93176 100644
+--- a/osu.Game/OsuGameBase.cs
++++ b/osu.Game/OsuGameBase.cs
+@@ -79,9 +79,9 @@ namespace osu.Game
+     public partial class OsuGameBase : Framework.Game, ICanAcceptFiles, IBeatSyncProvider
+     {
+ #if DEBUG
+-        public const string GAME_NAME = "osu! (development)";
++        public const string GAME_NAME = "Patchsu (development)";
+ #else
+-        public const string GAME_NAME = "osu!";
++        public const string GAME_NAME = "Patchsu";
+ #endif
+ 
+         public const string OSU_PROTOCOL = "osu://";
+diff --git a/osu.Game/Overlays/SettingsOverlay.cs b/osu.Game/Overlays/SettingsOverlay.cs
+index a82db88021..c9b7d17d78 100644
+--- a/osu.Game/Overlays/SettingsOverlay.cs
++++ b/osu.Game/Overlays/SettingsOverlay.cs
+@@ -17,6 +17,7 @@
+ using osu.Game.Overlays.Settings;
+ using osu.Game.Overlays.Settings.Sections;
+ using osu.Game.Overlays.Settings.Sections.Input;
++using osu.Game.LocalPriority;
+ using osu.Game.Rulesets;
+ using osuTK.Graphics;
+ 
+@@ -104,6 +105,10 @@ private void load(RulesetStore rulesets)
+                 new DebugSection()
+             });
+ 
++            // Patchsu: its own tab, right under Online (only when an applied patch has settings).
++            if (LocalPrioritySection.HasSubsections)
++                sections.Insert(sections.FindIndex(s => s is OnlineSection) + 1, new LocalPrioritySection());
++
+             var today = DateTimeOffset.Now;
+             if (today.Month == 4 && today.Day == 1)
+                 sections.Insert(9, new AfToggleSection());
+diff --git a/osu.Game/Overlays/Toolbar/Toolbar.cs b/osu.Game/Overlays/Toolbar/Toolbar.cs
+index 52fad2ba3b..169331c353 100644
+--- a/osu.Game/Overlays/Toolbar/Toolbar.cs
++++ b/osu.Game/Overlays/Toolbar/Toolbar.cs
+@@ -162,13 +162,8 @@ private void load(OsuGame osuGame)
+                                         AutoSizeAxes = Axes.X,
+                                         Children = new Drawable[]
+                                         {
+-                                            new ToolbarNewsButton(),
+-                                            new ToolbarChangelogButton(),
+-                                            new ToolbarWikiButton(),
+-                                            new ToolbarRankingsButton(),
++                                            // Patched: news, changelog, wiki, rankings, chat and social are stripped.
+                                             new ToolbarBeatmapListingButton(),
+-                                            new ToolbarChatButton(),
+-                                            new ToolbarSocialButton(),
+                                             new ToolbarMusicButton(),
+                                             //new ToolbarButton
+                                             //{
+diff --git a/osu.Game/Screens/Menu/ButtonSystem.cs b/osu.Game/Screens/Menu/ButtonSystem.cs
+index 8ff2e9e34d..3f299228b1 100644
+--- a/osu.Game/Screens/Menu/ButtonSystem.cs
++++ b/osu.Game/Screens/Menu/ButtonSystem.cs
+@@ -153,9 +153,7 @@ private void load(AudioManager audio, IdleTracker? idleTracker, GameHost host)
+             {
+                 Padding = new MarginPadding { Left = WEDGE_WIDTH },
+             });
+-            buttonsPlay.Add(new MainMenuButton(ButtonSystemStrings.Multi, @"button-default-select", OsuIcon.Online, new Color4(94, 63, 186, 255), (_, _) => State = ButtonSystemState.Multi, Key.M));
+-            buttonsPlay.Add(new MainMenuButton(ButtonSystemStrings.Playlists, @"button-default-select", OsuIcon.Tournament, new Color4(94, 63, 186, 255), onPlaylists, Key.L));
+-            buttonsPlay.Add(new DailyChallengeButton(@"button-daily-select", new Color4(94, 63, 186, 255), onDailyChallenge, Key.D));
++            // Patched: multiplayer, ranked play, playlists and daily challenge are stripped.
+             buttonsPlay.ForEach(b => b.VisibleState = ButtonSystemState.Play);
+ 
+             buttonsMulti.Add(new MainMenuButton(ButtonSystemStrings.Lounge, @"button-default-select", FontAwesome.Solid.Couch, new Color4(94, 63, 186, 255), onMultiplayer, Key.L, Key.M)
+diff --git a/osu.Game/Screens/Play/SubmittingPlayer.cs b/osu.Game/Screens/Play/SubmittingPlayer.cs
+index 72c6b8e39f..1330620555 100644
+--- a/osu.Game/Screens/Play/SubmittingPlayer.cs
++++ b/osu.Game/Screens/Play/SubmittingPlayer.cs
+@@ -40,6 +40,8 @@ public abstract partial class SubmittingPlayer : Player
+         /// </summary>
+         private long? token;
+ 
++        private static readonly bool score_submission_stripped = true;
++
+         [Resolved]
+         private IAPIProvider api { get; set; }
+ 
+@@ -102,6 +104,14 @@ private bool handleTokenRetrieval()
+             // Token request construction should happen post-load to allow derived classes to potentially prepare DI backings that are used to create the request.
+             var tcs = new TaskCompletionSource<bool>();
+ 
++            // Patched: score submission is stripped. No token is ever requested, so no score is ever sent.
++            // Solo play continues normally and the score is saved locally; online room play (already removed from the menus) exits.
++            if (score_submission_stripped)
++            {
++                handleTokenFailure(new InvalidOperationException("Score submission is disabled in this build."));
++                return false;
++            }
++
+             if (Mods.Value.Any(m => !m.UserPlayable))
+             {
+                 handleTokenFailure(new InvalidOperationException("Non-user playable mod selected."));
+diff --git a/osu.Game/Utils/SentryLogger.cs b/osu.Game/Utils/SentryLogger.cs
+index 3797fc734f..2c25e07107 100644
+--- a/osu.Game/Utils/SentryLogger.cs
++++ b/osu.Game/Utils/SentryLogger.cs
+@@ -43,10 +43,16 @@ public class SentryLogger : IDisposable
+ 
+         private readonly OsuGame game;
+ 
++        private static readonly bool error_reporting_stripped = true;
++
+         public SentryLogger(OsuGame game, Storage? storage = null)
+         {
+             this.game = game;
+ 
++            // Patched: crash / error reports are never sent.
++            if (error_reporting_stripped)
++                return;
++
+             if (Environment.GetEnvironmentVariable("OSU_DISABLE_ERROR_REPORTING") == "1")
+                 return;
+ 

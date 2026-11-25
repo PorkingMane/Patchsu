@@ -1,0 +1,43 @@
+<Project>
+  <!--
+    Patchsu (not part of osu!). Imported by osu-lazer/after.osu.sln.targets when osu.sln is built.
+    Replaces the solution build (which needs Android/iOS workloads) with:
+      1. a scratch clone of the osu-lazer checkout per patch set (work/check-<hash of patches>),
+      2. patches/*.patch applied there,
+      3. a build of the patched desktop game.
+    No original file is changed.
+  -->
+  <PropertyGroup>
+    <PatchsuDir>$(MSBuildThisFileDirectory)</PatchsuDir>
+    <PatchsuRepo>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)osu-lazer'))</PatchsuRepo>
+  </PropertyGroup>
+
+  <Target Name="Restore" />
+  <Target Name="PatchsuStripSolution" BeforeTargets="Build;Rebuild;Clean;Publish">
+    <ItemGroup>
+      <ProjectReference Remove="@(ProjectReference)" />
+    </ItemGroup>
+  </Target>
+  
+  
+
+  <Target Name="PatchsuBuild" AfterTargets="PatchsuStripSolution" Condition="'$(PatchsuBuilt)' != 'true'">
+    <ItemGroup>
+      <PatchsuPatch Include="$(PatchsuDir)patches/*.patch" />
+    </ItemGroup>
+    <GetFileHash Files="@(PatchsuPatch)" Algorithm="SHA256" HashEncoding="hex">
+      <Output TaskParameter="Items" ItemName="PatchsuPatchHash" />
+    </GetFileHash>
+    <PropertyGroup>
+      <PatchsuAllHashes>@(PatchsuPatchHash->'%(FileHash)', '')</PatchsuAllHashes>
+      <PatchsuKey>$(PatchsuAllHashes.Substring(0, 12))</PatchsuKey>
+      <PatchsuSrc>$(PatchsuDir)work/check-$(PatchsuKey)</PatchsuSrc>
+    </PropertyGroup>
+
+    <Message Importance="high" Text="Patchsu: building patched game in $(PatchsuSrc)" />
+    <Exec Condition="!Exists('$(PatchsuSrc)/osu.Desktop')" Command="git clone --quiet --shared --no-tags &quot;$(PatchsuRepo)&quot; &quot;$(PatchsuSrc)&quot;" />
+    <Exec Condition="!Exists('$(PatchsuSrc)/.patchsu-applied')" WorkingDirectory="$(PatchsuSrc)" Command="git apply --whitespace=nowarn &quot;%(PatchsuPatch.FullPath)&quot;" />
+    <Touch Condition="!Exists('$(PatchsuSrc)/.patchsu-applied')" Files="$(PatchsuSrc)/.patchsu-applied" AlwaysCreate="true" />
+    <Exec WorkingDirectory="$(PatchsuSrc)" Command="dotnet build osu.Desktop/osu.Desktop.csproj -c Release -nologo -v q" />
+  </Target>
+</Project>

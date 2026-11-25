@@ -1,0 +1,5 @@
+[submodule "Patchsu/osu-lazer"]
+	path = Patchsu/osu-lazer
+	url = https://github.com/ppy/osu
+	shallow = true
+	ignore = untracked

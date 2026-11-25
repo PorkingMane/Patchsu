@@ -1,0 +1,1096 @@
+diff --git a/osu.Game/Configuration/OsuConfigManager.cs b/osu.Game/Configuration/OsuConfigManager.cs
+index 89c9677fe5..8177dbc022 100644
+--- a/osu.Game/Configuration/OsuConfigManager.cs
++++ b/osu.Game/Configuration/OsuConfigManager.cs
+@@ -43,6 +43,7 @@ protected override void InitialiseDefaults()
+ 
+             SetDefault(OsuSetting.BeatmapDetailTab, BeatmapDetailTab.Local);
+             SetDefault(OsuSetting.BeatmapLeaderboardSortMode, LeaderboardSortMode.Score);
++            SetDefault(OsuSetting.BeatmapLeaderboardSortReversed, false);
+             SetDefault(OsuSetting.BeatmapDetailModsFilter, false);
+ 
+             SetDefault(OsuSetting.ShowConvertedBeatmaps, true);
+@@ -51,6 +52,7 @@ protected override void InitialiseDefaults()
+ 
+             SetDefault(OsuSetting.SongSelectGroupMode, GroupMode.None);
+             SetDefault(OsuSetting.SongSelectSortingMode, SortMode.Title);
++            SetDefault(OsuSetting.SongSelectSortingReversed, false);
+             SetDefault(OsuSetting.SongSelectCollectionFilter, string.Empty);
+ 
+             SetDefault(OsuSetting.RandomSelectAlgorithm, RandomSelectAlgorithm.RandomPermutation);
+@@ -488,5 +490,9 @@ public enum OsuSetting
+         /// </summary>
+         PMFriendsOnly,
+         HitsoundVolume,
++
++        // Patchsu: reversed sorting (right-click a sort).
++        BeatmapLeaderboardSortReversed,
++        SongSelectSortingReversed,
+     }
+ }
+diff --git a/osu.Game/Graphics/UserInterface/ShearedRangeSlider.cs b/osu.Game/Graphics/UserInterface/ShearedRangeSlider.cs
+index 417474cba3..588cc01f4e 100644
+--- a/osu.Game/Graphics/UserInterface/ShearedRangeSlider.cs
++++ b/osu.Game/Graphics/UserInterface/ShearedRangeSlider.cs
+@@ -15,6 +15,7 @@
+ using osu.Game.Overlays;
+ using osuTK;
+ using osuTK.Graphics;
++using osuTK.Input;
+ 
+ namespace osu.Game.Graphics.UserInterface
+ {
+@@ -170,6 +171,108 @@ protected override void LoadComplete()
+ 
+         protected virtual BoundSliderBar CreateBoundSlider(bool isUpper) => new BoundSliderBar(this, isUpper);
+ 
++        // Patchsu: right-clicking the bar brings the nub furthest from the cursor to it (holding keeps moving it).
++        // Middle-clicking resets the whole range.
++        private BoundSliderBar? rightClickTarget;
++
++        // same window the framework uses for left double-clicks.
++        private const double double_click_time = 250;
++
++        private BoundSliderBar? lastRightClickedNubSlider;
++        private double lastRightClickOnNubTime;
++
++        protected override bool OnMouseDown(MouseDownEvent e)
++        {
++            switch (e.Button)
++            {
++                case MouseButton.Middle:
++                    if (LowerBound.Disabled || UpperBound.Disabled)
++                        return true;
++
++                    LowerBound.SetDefault();
++                    UpperBound.SetDefault();
++                    return true;
++
++                case MouseButton.Right:
++                    if (!SliderContainer.ReceivePositionalInputAt(e.ScreenSpaceMousePosition))
++                        break;
++
++                    // like a left click, a right click on top of either nub doesn't move anything
++                    // (otherwise clicking twice in one spot would stack both nubs there),
++                    // but double right-clicking a nub resets it, like a left double-click does.
++                    // (the lower nub is drawn on top, so it wins where they overlap.)
++                    BoundSliderBar? clickedNubSlider = LowerBoundSlider.Nub.ScreenSpaceDrawQuad.Contains(e.ScreenSpaceMousePosition) ? LowerBoundSlider
++                        : UpperBoundSlider.Nub.ScreenSpaceDrawQuad.Contains(e.ScreenSpaceMousePosition) ? UpperBoundSlider
++                        : null;
++
++                    if (clickedNubSlider != null)
++                    {
++                        if (clickedNubSlider == lastRightClickedNubSlider && Time.Current - lastRightClickOnNubTime <= double_click_time)
++                        {
++                            if (!clickedNubSlider.Current.Disabled)
++                                clickedNubSlider.Current.SetDefault();
++
++                            lastRightClickedNubSlider = null;
++                        }
++                        else
++                        {
++                            lastRightClickedNubSlider = clickedNubSlider;
++                            lastRightClickOnNubTime = Time.Current;
++                        }
++
++                        return true;
++                    }
++
++                    float cursorX = e.ScreenSpaceMousePosition.X;
++                    float lowerDistance = Math.Abs(LowerBoundSlider.Nub.ScreenSpaceDrawQuad.Centre.X - cursorX);
++                    float upperDistance = Math.Abs(UpperBoundSlider.Nub.ScreenSpaceDrawQuad.Centre.X - cursorX);
++
++                    rightClickTarget = lowerDistance > upperDistance ? LowerBoundSlider : UpperBoundSlider;
++                    rightClickTarget.MoveTo(e.ScreenSpaceMousePosition, e.ShiftPressed);
++
++                    // the moved nub is now under the cursor: a quick second right-click resets it (as a left double-click would).
++                    lastRightClickedNubSlider = rightClickTarget;
++                    lastRightClickOnNubTime = Time.Current;
++                    return true;
++            }
++
++            return base.OnMouseDown(e);
++        }
++
++        // osu! enables right-button dragging (for absolute scrolling), so the drag has to be taken here:
++        // otherwise the nub under the cursor (the closest one) would start following it as well.
++        protected override bool OnDragStart(DragStartEvent e)
++        {
++            if (e.Button != MouseButton.Right)
++                return base.OnDragStart(e);
++
++            return rightClickTarget != null;
++        }
++
++        protected override void OnDrag(DragEvent e)
++        {
++            if (e.Button == MouseButton.Right)
++                rightClickTarget?.MoveTo(e.ScreenSpaceMousePosition, e.ShiftPressed);
++            else
++                base.OnDrag(e);
++        }
++
++        protected override void OnDragEnd(DragEndEvent e)
++        {
++            if (e.Button == MouseButton.Right)
++                rightClickTarget = null;
++            else
++                base.OnDragEnd(e);
++        }
++
++        protected override void OnMouseUp(MouseUpEvent e)
++        {
++            if (e.Button == MouseButton.Right)
++                rightClickTarget = null;
++
++            base.OnMouseUp(e);
++        }
++
+         protected partial class BoundSliderBar : ShearedSliderBar<double>
+         {
+             private readonly ShearedRangeSlider rangeSlider;
+@@ -273,6 +376,27 @@ protected override bool OnHover(HoverEvent e)
+                 base.OnHover(e);
+                 return true; // Make sure only one nub shows hover effect at once.
+             }
++
++            // Patchsu: right-button drags belong to the range slider (it moves the furthest nub).
++            protected override bool OnDragStart(DragStartEvent e) => e.Button != MouseButton.Right && base.OnDragStart(e);
++
++            /// <summary>
++            /// Patchsu: moves this nub to the given screen-space position as a user change (with the usual tick sound).
++            /// </summary>
++            public void MoveTo(Vector2 screenSpacePosition, bool snap)
++            {
++                if (Current.Disabled || Current is not BindableNumber<double> current)
++                    return;
++
++                float localX = ToLocalSpace(screenSpacePosition).X;
++                float proportion = Math.Clamp((localX - RangePadding) / UsableWidth, 0, 1);
++
++                double previous = current.Value;
++                current.SetProportional(proportion, snap ? KeyboardStep : 0);
++
++                if (current.Value != previous)
++                    OnUserChange(current.Value);
++            }
+         }
+     }
+ }
+diff --git a/osu.Game/Graphics/UserInterfaceV2/ReversibleShearedDropdown.cs b/osu.Game/Graphics/UserInterfaceV2/ReversibleShearedDropdown.cs
+new file mode 100644
+index 0000000000..4662580743
+--- /dev/null
++++ b/osu.Game/Graphics/UserInterfaceV2/ReversibleShearedDropdown.cs
+@@ -0,0 +1,150 @@
++// Patched for fun and personal needs. I suggest playing osu!lazer instead of this client. All modifications are done with AI from personal interest.
++// Peppy openly stated that he does not like using AI and we completely respect it. I only do it for research purposes and to see what features I would love in lazer.
++// To use it you'll need to compile it on your PC using provided .sh / .cmd files.
++// This client modification does not break any osu! rules or terms of service and do not conflict with osu! rules for account banning
++// However, I do not take any liablity if your account will be banned for accessing beatmap, leaderboard and metadata downloading
++// Use responsibly and preferably local-only.
++
++using System.Linq;
++using osu.Framework.Bindables;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Sprites;
++using osu.Framework.Graphics.UserInterface;
++using osu.Framework.Input.Events;
++using osu.Framework.Localisation;
++using osuTK;
++using osuTK.Input;
++
++namespace osu.Game.Graphics.UserInterfaceV2
++{
++    /// <summary>
++    /// Patchsu: a sort dropdown whose order can be reversed with the right mouse button.
++    /// Right-clicking the header flips the current order; right-clicking an item selects it in reverse
++    /// (left-clicking an item selects it in its normal order).
++    /// </summary>
++    public partial class ReversibleShearedDropdown<T> : ShearedDropdown<T>
++    {
++        /// <summary>
++        /// Whether the selected sort should be applied in reverse.
++        /// </summary>
++        public BindableBool Reversed { get; } = new BindableBool();
++
++        public ReversibleShearedDropdown(LocalisableString label)
++            : base(label)
++        {
++        }
++
++        protected override void LoadComplete()
++        {
++            base.LoadComplete();
++
++            Reversed.BindValueChanged(r => (Header as ReversibleHeader)?.ShowReversed(r.NewValue), true);
++        }
++
++        protected override DropdownHeader CreateHeader() => new ReversibleHeader();
++
++        protected override DropdownMenu CreateMenu() => new ReversibleMenu();
++
++        private void select(T value, bool reversed)
++        {
++            if (Current.Disabled)
++                return;
++
++            Reversed.Value = reversed;
++            Current.Value = value;
++        }
++
++        private partial class ReversibleHeader : ShearedDropdownHeader
++        {
++            private const float icon_size = 9;
++            // the label text already ends in a little side spacing, so the icon needs no extra gap.
++            private const float icon_spacing = 0;
++
++            // the label's capitals sit a little below the box's centre (descender room), so lower the icon to match them.
++            private const float icon_y_offset = 1;
++
++            private readonly SpriteText? labelText;
++            private readonly MarginPadding labelMargin;
++            private readonly SpriteIcon reversedIcon;
++
++            public ReversibleHeader()
++            {
++                // a down arrow next to the label (e.g. "Sort ↓") while the order is reversed.
++                labelText = LabelContainer.OfType<SpriteText>().FirstOrDefault();
++                labelMargin = labelText?.Margin ?? new MarginPadding { Horizontal = 10f };
++
++                LabelContainer.Add(reversedIcon = new SpriteIcon
++                {
++                    Anchor = Anchor.CentreRight,
++                    Origin = Anchor.CentreRight,
++                    // positioned inside the label's right margin, which grows to make room for it.
++                    BypassAutoSizeAxes = Axes.Both,
++                    X = -labelMargin.Right,
++                    Y = icon_y_offset,
++                    Size = new Vector2(icon_size),
++                    Icon = FontAwesome.Solid.ArrowDown,
++                    Shear = -OsuGame.SHEAR,
++                    Alpha = 0,
++                });
++            }
++
++            public void ShowReversed(bool reversed)
++            {
++                if (labelText != null)
++                    labelText.Margin = reversed ? labelMargin with { Right = labelMargin.Right + icon_size + icon_spacing } : labelMargin;
++
++                reversedIcon.Alpha = reversed ? 1 : 0;
++            }
++
++            protected override bool OnMouseDown(MouseDownEvent e)
++            {
++                if (e.Button == MouseButton.Right && Enabled.Value && Dropdown is ReversibleShearedDropdown<T> dropdown)
++                {
++                    dropdown.Reversed.Toggle();
++                    return true;
++                }
++
++                return base.OnMouseDown(e);
++            }
++        }
++
++        private partial class ReversibleMenu : ShearedDropdownMenu
++        {
++            protected override DrawableDropdownMenuItem CreateDrawableDropdownMenuItem(MenuItem item) => new ReversibleMenuItem(item)
++            {
++                BackgroundColourHover = HoverColour,
++                BackgroundColourSelected = SelectionColour
++            };
++
++            private partial class ReversibleMenuItem : ShearedMenuItem
++            {
++                public ReversibleMenuItem(MenuItem item)
++                    : base(item)
++                {
++                }
++
++                private ReversibleShearedDropdown<T>? findDropdown() => this.FindClosestParent<ReversibleShearedDropdown<T>>();
++
++                protected override bool OnClick(ClickEvent e)
++                {
++                    if (Item is DropdownMenuItem<T> dropdownItem && findDropdown() is ReversibleShearedDropdown<T> dropdown)
++                        dropdown.select(dropdownItem.Value, false);
++
++                    return base.OnClick(e);
++                }
++
++                protected override bool OnMouseDown(MouseDownEvent e)
++                {
++                    if (e.Button == MouseButton.Right && Item is DropdownMenuItem<T> dropdownItem && findDropdown() is ReversibleShearedDropdown<T> dropdown)
++                    {
++                        dropdown.select(dropdownItem.Value, true);
++                        dropdown.Menu.Close();
++                        return true;
++                    }
++
++                    return base.OnMouseDown(e);
++                }
++            }
++        }
++    }
++}
+diff --git a/osu.Game/Online/Leaderboards/LeaderboardManager.cs b/osu.Game/Online/Leaderboards/LeaderboardManager.cs
+index d4a258a307..baf351c1e8 100644
+--- a/osu.Game/Online/Leaderboards/LeaderboardManager.cs
++++ b/osu.Game/Online/Leaderboards/LeaderboardManager.cs
+@@ -5,6 +5,8 @@
+ using System.Collections.Generic;
+ using System.Diagnostics;
+ using System.Linq;
++using System.Threading;
++using System.Threading.Tasks;
+ using osu.Framework.Allocation;
+ using osu.Framework.Bindables;
+ using osu.Framework.Development;
+@@ -46,6 +48,14 @@ public partial class LeaderboardManager : Component
+         [Resolved]
+         private RulesetStore rulesets { get; set; } = null!;
+ 
++        // Patchsu: used to calculate PP for scores that have none when sorting by PP.
++        [Resolved]
++        private BeatmapDifficultyCache? difficultyCache { get; set; }
++
++        private CancellationTokenSource? performanceCancellation;
++
++        private readonly Dictionary<string, double?> calculatedPerformance = new Dictionary<string, double?>();
++
+         /// <summary>
+         /// Fetch leaderboard content with the new criteria specified in the background.
+         /// On completion, <see cref="Scores"/> will be updated with the results from this call (unless a more recent call with a different criteria has completed).
+@@ -59,6 +69,7 @@ public void FetchWithCriteria(LeaderboardCriteria newCriteria, bool forceRefresh
+                 return;
+ 
+             CurrentCriteria = newCriteria;
++            performanceCancellation?.Cancel();
+             localScoreSubscription?.Dispose();
+             inFlightOnlineRequest?.Cancel();
+             scores.Value = null;
+@@ -84,9 +95,6 @@ public void FetchWithCriteria(LeaderboardCriteria newCriteria, bool forceRefresh
+ 
+                 default:
+                 {
+-                    if (newCriteria.Sorting != LeaderboardSortMode.Score)
+-                        throw new NotSupportedException($@"Requesting online scores with a {nameof(LeaderboardSortMode)} other than {nameof(LeaderboardSortMode.Score)} is not supported");
+-
+                     if (!api.IsLoggedIn)
+                     {
+                         scores.Value = LeaderboardScores.Failure(LeaderboardFailState.NotLoggedIn);
+@@ -134,22 +142,25 @@ public void FetchWithCriteria(LeaderboardCriteria newCriteria, bool forceRefresh
+                         if (inFlightOnlineRequest != null && !newRequest.Equals(inFlightOnlineRequest))
+                             return;
+ 
+-                        var result = LeaderboardScores.Success
++                        var onlineScores = response.Scores.Select(s => s.ToScoreInfo(rulesets, newCriteria.Beatmap))
++                                                   .OrderByTotalScore()
++                                                   .Select((s, idx) =>
++                                                   {
++                                                       s.Position = idx + 1;
++                                                       return s;
++                                                   })
++                                                   .ToArray();
++                        var userScore = response.UserScore?.CreateScoreInfo(rulesets, newCriteria.Beatmap);
++                        inFlightOnlineRequest = null;
++
++                        // Patchsu: the online leaderboard is sorted here, so every sort works for it too.
++                        setSortedScores(newCriteria, onlineScores, sorted => LeaderboardScores.Success
+                         (
+-                            response.Scores.Select(s => s.ToScoreInfo(rulesets, newCriteria.Beatmap))
+-                                    .OrderByTotalScore()
+-                                    .Select((s, idx) =>
+-                                    {
+-                                        s.Position = idx + 1;
+-                                        return s;
+-                                    })
+-                                    .ToArray(),
++                            sorted,
+                             scoresRequested: newRequest.ScoresRequested,
+                             totalScores: response.ScoresCount,
+-                            response.UserScore?.CreateScoreInfo(rulesets, newCriteria.Beatmap)
+-                        );
+-                        inFlightOnlineRequest = null;
+-                        scores.Value = result;
++                            userScore
++                        ));
+                     };
+                     newRequest.Failure += ex =>
+                     {
+@@ -192,10 +203,87 @@ private void localScoresChanged(IRealmCollection<ScoreInfo> sender, ChangeSet? c
+                 }
+             }
+ 
+-            newScores = newScores.Detach().OrderByCriteria(CurrentCriteria.Sorting);
++            setSortedScores(CurrentCriteria, newScores.Detach().ToArray(),
++                sorted => LeaderboardScores.Success(sorted, scoresRequested: sorted.Length, totalScores: sorted.Length, null));
++        }
++
++        /// <summary>
++        /// Patchsu: sorts <paramref name="unsorted"/> by the criteria's sort (and direction) and publishes them.
++        /// When sorting by PP, scores without PP get it calculated first (in the background).
++        /// </summary>
++        private void setSortedScores(LeaderboardCriteria criteria, ScoreInfo[] unsorted, Func<ScoreInfo[], LeaderboardScores> createResult)
++        {
++            performanceCancellation?.Cancel();
++            performanceCancellation = null;
++
++            if (criteria.Sorting != LeaderboardSortMode.Performance || unsorted.All(s => s.PP != null))
++            {
++                scores.Value = createResult(unsorted.OrderByCriteria(criteria.Sorting, criteria.SortReversed).ToArray());
++                return;
++            }
++
++            var cancellationSource = performanceCancellation = new CancellationTokenSource();
++            var token = cancellationSource.Token;
+ 
+-            var newScoresArray = newScores.ToArray();
+-            scores.Value = LeaderboardScores.Success(newScoresArray, scoresRequested: newScoresArray.Length, totalScores: newScoresArray.Length, null);
++            Task.Run(() => fillPerformance(unsorted, token), token).ContinueWith(_ => Schedule(() =>
++            {
++                if (token.IsCancellationRequested || !ReferenceEquals(CurrentCriteria, criteria))
++                    return;
++
++                scores.Value = createResult(unsorted.OrderByCriteria(criteria.Sorting, criteria.SortReversed).ToArray());
++            }), CancellationToken.None);
++        }
++
++        private async Task fillPerformance(IEnumerable<ScoreInfo> scoresToFill, CancellationToken cancellationToken)
++        {
++            foreach (var score in scoresToFill.Where(s => s.PP == null))
++            {
++                cancellationToken.ThrowIfCancellationRequested();
++
++                string key = score.OnlineID > 0 ? $@"online:{score.OnlineID}" : $@"local:{score.ID}";
++
++                lock (calculatedPerformance)
++                {
++                    if (calculatedPerformance.TryGetValue(key, out double? known))
++                    {
++                        score.PP = known;
++                        continue;
++                    }
++                }
++
++                double? pp = null;
++
++                try
++                {
++                    var calculator = score.Ruleset.CreateInstance().CreatePerformanceCalculator();
++
++                    if (difficultyCache != null && calculator != null && score.BeatmapInfo != null)
++                    {
++                        var difficulty = await difficultyCache.GetDifficultyAsync(score.BeatmapInfo, score.Ruleset, score.Mods, cancellationToken).ConfigureAwait(false);
++
++                        if (difficulty?.DifficultyAttributes != null)
++                        {
++                            var result = await calculator.CalculateAsync(score, difficulty.Value.DifficultyAttributes, cancellationToken).ConfigureAwait(false);
++
++                            if (double.IsFinite(result.Total))
++                                pp = result.Total;
++                        }
++                    }
++                }
++                catch (OperationCanceledException)
++                {
++                    throw;
++                }
++                catch (Exception e)
++                {
++                    Logger.Log($@"Patchsu: could not calculate PP for leaderboard sorting: {e.Message}");
++                }
++
++                score.PP = pp;
++
++                lock (calculatedPerformance)
++                    calculatedPerformance[key] = pp;
++            }
+         }
+ 
+         protected override void Dispose(bool isDisposing)
+@@ -203,6 +291,7 @@ protected override void Dispose(bool isDisposing)
+             base.Dispose(isDisposing);
+ 
+             localScoreSubscription?.Dispose();
++            performanceCancellation?.Cancel();
+         }
+     }
+ 
+@@ -211,7 +300,8 @@ public record LeaderboardCriteria(
+         RulesetInfo? Ruleset,
+         BeatmapLeaderboardScope Scope,
+         Mod[]? ExactMods,
+-        LeaderboardSortMode Sorting = LeaderboardSortMode.Score
++        LeaderboardSortMode Sorting = LeaderboardSortMode.Score,
++        bool SortReversed = false
+     );
+ 
+     public record LeaderboardScores
+diff --git a/osu.Game/Online/Leaderboards/LeaderboardSortMode.cs b/osu.Game/Online/Leaderboards/LeaderboardSortMode.cs
+index 2f2418763d..50ae51be00 100644
+--- a/osu.Game/Online/Leaderboards/LeaderboardSortMode.cs
++++ b/osu.Game/Online/Leaderboards/LeaderboardSortMode.cs
+@@ -1,6 +1,7 @@
+ // Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
+ // See the LICENCE file in the repository root for full licence text.
+ 
++using System.ComponentModel;
+ using osu.Framework.Localisation;
+ using osu.Game.Localisation;
+ 
+@@ -11,6 +12,10 @@ public enum LeaderboardSortMode
+         [LocalisableDescription(typeof(BeatmapLeaderboardWedgeStrings), nameof(BeatmapLeaderboardWedgeStrings.Score))]
+         Score,
+ 
++        // Patchsu: sort by performance points (calculated locally for scores that have none).
++        [Description(@"PP")]
++        Performance,
++
+         [LocalisableDescription(typeof(BeatmapLeaderboardWedgeStrings), nameof(BeatmapLeaderboardWedgeStrings.Accuracy))]
+         Accuracy,
+ 
+diff --git a/osu.Game/Overlays/Toolbar/ToolbarMusicButton.cs b/osu.Game/Overlays/Toolbar/ToolbarMusicButton.cs
+index e6ffc1ad5e..8c92821901 100644
+--- a/osu.Game/Overlays/Toolbar/ToolbarMusicButton.cs
++++ b/osu.Game/Overlays/Toolbar/ToolbarMusicButton.cs
+@@ -73,12 +73,39 @@ private void load(NowPlayingOverlay music)
+         private IBindable<double> globalVolume;
+         private Container volumeDisplay;
+ 
++        // Patchsu: middle-clicking the button mutes (and unmutes) all music.
++        private readonly BindableDouble musicMuteAdjustment = new BindableDouble(1);
++
+         protected override void LoadComplete()
+         {
+             base.LoadComplete();
+ 
+             globalVolume = audio.Volume.GetBoundCopy();
+             globalVolume.BindValueChanged(v => volumeBar.ResizeHeightTo((float)v.NewValue, 200, Easing.OutQuint), true);
++
++            audio.Tracks.AddAdjustment(AdjustableProperty.Volume, musicMuteAdjustment);
++        }
++
++        protected override bool OnMouseDown(MouseDownEvent e)
++        {
++            if (e.Button == MouseButton.Middle)
++            {
++                bool muted = musicMuteAdjustment.Value == 0;
++                musicMuteAdjustment.Value = muted ? 1 : 0;
++
++                // dim the icon and the volume bar while music is muted.
++                IconContainer.FadeTo(muted ? 1 : 0.35f, 200, Easing.OutQuint);
++                volumeDisplay.FadeTo(muted ? 1 : 0.35f, 200, Easing.OutQuint);
++                return true;
++            }
++
++            return base.OnMouseDown(e);
++        }
++
++        protected override void Dispose(bool isDisposing)
++        {
++            base.Dispose(isDisposing);
++            audio?.Tracks.RemoveAdjustment(AdjustableProperty.Volume, musicMuteAdjustment);
+         }
+ 
+         protected override bool OnKeyDown(KeyDownEvent e)
+diff --git a/osu.Game/Scoring/ScoreInfoExtensions.cs b/osu.Game/Scoring/ScoreInfoExtensions.cs
+index 4d7685aec9..581ef3d830 100644
+--- a/osu.Game/Scoring/ScoreInfoExtensions.cs
++++ b/osu.Game/Scoring/ScoreInfoExtensions.cs
+@@ -38,12 +38,28 @@ public static IEnumerable<ScoreInfo> OrderByTotalScore(this IEnumerable<ScoreInf
+         /// <param name="leaderboardSortMode">The attribute to sort the scores by.</param>
+         /// <returns>The given <paramref name="scores"/> ordered by the selected mode.</returns>
+         public static IEnumerable<ScoreInfo> OrderByCriteria(this IEnumerable<ScoreInfo> scores, LeaderboardSortMode leaderboardSortMode)
++            => OrderByCriteria(scores, leaderboardSortMode, false);
++
++        /// <summary>
++        /// Patchsu: orders by the selected <see cref="LeaderboardSortMode"/>, optionally in reverse.
++        /// </summary>
++        public static IEnumerable<ScoreInfo> OrderByCriteria(this IEnumerable<ScoreInfo> scores, LeaderboardSortMode leaderboardSortMode, bool reversed)
++        {
++            var ordered = orderByCriteria(scores, leaderboardSortMode);
++            return reversed ? ordered.Reverse() : ordered;
++        }
++
++        private static IEnumerable<ScoreInfo> orderByCriteria(IEnumerable<ScoreInfo> scores, LeaderboardSortMode leaderboardSortMode)
+         {
+             switch (leaderboardSortMode)
+             {
+                 case LeaderboardSortMode.Score:
+                     return scores.OrderByDescending(s => s.TotalScore);
+ 
++                case LeaderboardSortMode.Performance:
++                    // scores without PP (it couldn't be calculated) go last.
++                    return scores.OrderByDescending(s => s.PP ?? -1).ThenByDescending(s => s.TotalScore);
++
+                 case LeaderboardSortMode.Accuracy:
+                     return scores.OrderByDescending(s => s.Accuracy).ThenByDescending(s => s.TotalScore);
+ 
+diff --git a/osu.Game/Screens/Select/BeatmapCarouselFilterSorting.cs b/osu.Game/Screens/Select/BeatmapCarouselFilterSorting.cs
+index 5aa3698e9e..6996afd09e 100644
+--- a/osu.Game/Screens/Select/BeatmapCarouselFilterSorting.cs
++++ b/osu.Game/Screens/Select/BeatmapCarouselFilterSorting.cs
+@@ -19,6 +19,17 @@ public class BeatmapCarouselFilterSorting : ICarouselFilter
+ 
+         private readonly Func<FilterCriteria> getCriteria;
+ 
++        // Patchsu: random sort. Each beatmap (set) gets a fixed pseudo-random key from the current seed, so the order
++        // stays put while filtering and newly imported maps slot in without reshuffling the rest.
++        private SortMode? lastSort;
++        private int shuffleSeed;
++
++        // compare() is static and every filter run sorts on its own thread, so the seed for the current run is kept per thread.
++        [ThreadStatic]
++        private static int randomSortSeed;
++
++        private static int randomKey(Guid id) => HashCode.Combine(randomSortSeed, id);
++
+         public BeatmapCarouselFilterSorting(Func<FilterCriteria> getCriteria)
+         {
+             this.getCriteria = getCriteria;
+@@ -28,6 +39,12 @@ public async Task<List<CarouselItem>> Run(IEnumerable<CarouselItem> items, Cance
+         {
+             var criteria = getCriteria();
+ 
++            // Patchsu: pick a new shuffle each time "Random" is chosen; keep it while it stays chosen.
++            if (criteria.Sort == SortMode.Random && lastSort != SortMode.Random)
++                shuffleSeed = System.Random.Shared.Next();
++            lastSort = criteria.Sort;
++            randomSortSeed = shuffleSeed;
++
+             bool groupedSets = BeatmapCarouselFilterGrouping.ShouldGroupBeatmapsTogether(criteria);
+ 
+             BeatmapItemsCount = items.Count();
+@@ -43,10 +60,11 @@ public async Task<List<CarouselItem>> Run(IEnumerable<CarouselItem> items, Cance
+                         return compareDifficulty(ab, bb, criteria.Sort);
+ 
+                     // If we're grouping by sets, all fallback sorts need to be aggregates for the set.
+-                    return compare(ab, bb, criteria.Sort, aggregate: true);
++                    // Patchsu: a reversed sort flips the order of sets (difficulties inside a set stay ordered by star rating).
++                    return compare(ab, bb, criteria.Sort, aggregate: true) * (criteria.SortReversed ? -1 : 1);
+                 }
+ 
+-                return compare(ab, bb, criteria.Sort, aggregate: false);
++                return compare(ab, bb, criteria.Sort, aggregate: false) * (criteria.SortReversed ? -1 : 1);
+             })).ToList();
+         }, cancellationToken).ConfigureAwait(false);
+ 
+@@ -74,6 +92,13 @@ private static int compare(BeatmapInfo a, BeatmapInfo b, SortMode sort, bool agg
+                     comparison = OrdinalSortByCaseStringComparer.DEFAULT.Compare(a.BeatmapSet!.Metadata.Source, b.BeatmapSet!.Metadata.Source);
+                     break;
+ 
++                // Patchsu: like F2, shuffle whole sets when difficulties are grouped into sets, single difficulties otherwise.
++                case SortMode.Random:
++                    comparison = aggregate
++                        ? randomKey(a.BeatmapSet!.ID).CompareTo(randomKey(b.BeatmapSet!.ID))
++                        : randomKey(a.ID).CompareTo(randomKey(b.ID));
++                    break;
++
+                 case SortMode.Difficulty:
+                     comparison = a.StarRating.CompareTo(b.StarRating);
+                     break;
+diff --git a/osu.Game/Screens/Select/BeatmapDetailsArea.Header.cs b/osu.Game/Screens/Select/BeatmapDetailsArea.Header.cs
+index b0741b58e2..59d96d5e84 100644
+--- a/osu.Game/Screens/Select/BeatmapDetailsArea.Header.cs
++++ b/osu.Game/Screens/Select/BeatmapDetailsArea.Header.cs
+@@ -27,7 +27,7 @@ public partial class Header : CompositeDrawable
+             private FillFlowContainer leaderboardControls = null!;
+ 
+             private ShearedDropdown<BeatmapLeaderboardScope> scopeDropdown = null!;
+-            private ShearedDropdown<LeaderboardSortMode> sortDropdown = null!;
++            private ReversibleShearedDropdown<LeaderboardSortMode> sortDropdown = null!;
+             private ShearedToggleButton selectedModsToggle = null!;
+ 
+             public IBindable<Selection> Type => tabControl.Current;
+@@ -38,6 +38,11 @@ public partial class Header : CompositeDrawable
+ 
+             public IBindable<LeaderboardSortMode> Sorting => sortDropdown.Current;
+ 
++            // Patchsu: right-click a sort to reverse it.
++            public IBindable<bool> SortReversed => sortDropdown.Reversed;
++
++            private readonly Bindable<bool> configLeaderboardSortReversed = new Bindable<bool>();
++
+             private readonly Bindable<LeaderboardSortMode> configLeaderboardSortMode = new Bindable<LeaderboardSortMode>();
+ 
+             public IBindable<bool> FilterBySelectedMods => selectedModsToggle.Active;
+@@ -83,7 +88,7 @@ private void load(OsuConfigManager config)
+                                         // Eyeballed to make spacing match. Because shear is silly and implemented in different ways between dropdown and button.
+                                         Margin = new MarginPadding { Left = -9.2f },
+                                     },
+-                                    sortDropdown = new ShearedDropdown<LeaderboardSortMode>(BeatmapLeaderboardWedgeStrings.Sort)
++                                    sortDropdown = new ReversibleShearedDropdown<LeaderboardSortMode>(BeatmapLeaderboardWedgeStrings.Sort)
+                                     {
+                                         Anchor = Anchor.TopRight,
+                                         Origin = Anchor.TopRight,
+@@ -107,6 +112,7 @@ private void load(OsuConfigManager config)
+ 
+                 config.BindWith(OsuSetting.BeatmapDetailTab, configDetailTab);
+                 config.BindWith(OsuSetting.BeatmapLeaderboardSortMode, configLeaderboardSortMode);
++                config.BindWith(OsuSetting.BeatmapLeaderboardSortReversed, configLeaderboardSortReversed);
+                 config.BindWith(OsuSetting.BeatmapDetailModsFilter, selectedModsToggle.Active);
+             }
+ 
+@@ -124,22 +130,9 @@ protected override void LoadComplete()
+                     updateConfigDetailTab();
+                 }, true);
+ 
+-                scopeDropdown.Current.BindValueChanged(scope =>
+-                {
+-                    sortDropdown.Current.Disabled = false;
+-
+-                    if (scope.NewValue == BeatmapLeaderboardScope.Local)
+-                    {
+-                        sortDropdown.Current.BindTo(configLeaderboardSortMode);
+-                    }
+-                    else
+-                    {
+-                        // future implementation when we have web-side support.
+-                        sortDropdown.Current.UnbindFrom(configLeaderboardSortMode);
+-                        sortDropdown.Current.Value = LeaderboardSortMode.Score;
+-                        sortDropdown.Current.Disabled = true;
+-                    }
+-                }, true);
++                // Patchsu: online leaderboards are sorted on our side, so every scope can use every sort (and reverse it).
++                sortDropdown.Current.BindTo(configLeaderboardSortMode);
++                sortDropdown.Reversed.BindTo(configLeaderboardSortReversed);
+             }
+ 
+             protected override bool OnMouseDown(MouseDownEvent e) => true;
+diff --git a/osu.Game/Screens/Select/BeatmapDetailsArea.cs b/osu.Game/Screens/Select/BeatmapDetailsArea.cs
+index f83fd1539d..d955d2b25a 100644
+--- a/osu.Game/Screens/Select/BeatmapDetailsArea.cs
++++ b/osu.Game/Screens/Select/BeatmapDetailsArea.cs
+@@ -88,6 +88,7 @@ private void updateDisplay()
+                     {
+                         Scope = { BindTarget = header.Scope },
+                         Sorting = { BindTarget = header.Sorting },
++                        SortReversed = { BindTarget = header.SortReversed },
+                         FilterBySelectedMods = { BindTarget = header.FilterBySelectedMods },
+                     };
+ 
+diff --git a/osu.Game/Screens/Select/BeatmapLeaderboardScore.cs b/osu.Game/Screens/Select/BeatmapLeaderboardScore.cs
+index ff34c9ef38..2dac8bef8b 100644
+--- a/osu.Game/Screens/Select/BeatmapLeaderboardScore.cs
++++ b/osu.Game/Screens/Select/BeatmapLeaderboardScore.cs
+@@ -117,6 +117,19 @@ public sealed partial class BeatmapLeaderboardScore : OsuClickableContainer, IHa
+         private Container rankLabelStandalone = null!;
+         private Container rankLabelOverlay = null!;
+ 
++        // Patchsu: the play's star rating (with its mods), left of the statistics.
++        [Resolved]
++        private osu.Game.Beatmaps.BeatmapDifficultyCache? difficultyCache { get; set; }
++
++        private const float star_rating_spacing = 15;
++
++        private FillFlowContainer dateFlow = null!;
++        private ScoreComponentLabel comboLabel = null!;
++        private osu.Game.Beatmaps.Drawables.StarRatingDisplay starRating = null!;
++        private readonly System.Threading.CancellationTokenSource starRatingCancellation = new System.Threading.CancellationTokenSource();
++        private bool starRatingKnown;
++        private bool starRatingShown;
++
+         private readonly bool sheared;
+ 
+         public override bool ReceivePositionalInputAt(Vector2 screenSpacePos)
+@@ -268,7 +281,7 @@ private void load()
+                                                 Padding = new MarginPadding { Horizontal = corner_radius },
+                                                 Children = new Drawable[]
+                                                 {
+-                                                    new FillFlowContainer
++                                                    dateFlow = new FillFlowContainer
+                                                     {
+                                                         Shear = sheared ? -OsuGame.SHEAR : Vector2.Zero,
+                                                         Direction = FillDirection.Horizontal,
+@@ -324,7 +337,7 @@ private void load()
+                                                     Direction = FillDirection.Horizontal,
+                                                     Children = new Drawable[]
+                                                     {
+-                                                        new ScoreComponentLabel(BeatmapsetsStrings.ShowScoreboardHeadersCombo.ToUpper(), $"{Score.MaxCombo.ToString()}x",
++                                                        comboLabel = new ScoreComponentLabel(BeatmapsetsStrings.ShowScoreboardHeadersCombo.ToUpper(), $"{Score.MaxCombo.ToString()}x",
+                                                             Score.IsPerfect(), 60),
+                                                         new ScoreComponentLabel(BeatmapsetsStrings.ShowScoreboardHeadersAccuracy.ToUpper(), Score.DisplayAccuracy, Score.Accuracy == 1,
+                                                             55),
+@@ -335,6 +348,17 @@ private void load()
+                                         }
+                                     }
+                                 },
++                                // Patchsu: placed in Update() just left of "Max Combo" and level with that caption, so it lines up on every
++                                // row whatever the date's width, and shares its line with the date only (never the username).
++                                starRating = new osu.Game.Beatmaps.Drawables.StarRatingDisplay(default, osu.Game.Beatmaps.Drawables.StarRatingDisplaySize.Small)
++                                {
++                                    Anchor = Anchor.CentreRight,
++                                    Origin = Anchor.CentreRight,
++                                    Shear = sheared ? -OsuGame.SHEAR : Vector2.Zero,
++                                    Scale = new Vector2(0.9f),
++                                    AlwaysPresent = true,
++                                    Alpha = 0,
++                                },
+                             },
+                         },
+                     },
+@@ -484,6 +508,8 @@ protected override void LoadComplete()
+         {
+             base.LoadComplete();
+ 
++            loadStarRating();
++
+             scoringMode = config.GetBindable<ScoringMode>(OsuSetting.ScoreDisplayMode);
+             scoringMode.BindValueChanged(s =>
+             {
+@@ -565,6 +591,63 @@ protected override void Update()
+                 Left = rankLabelStandalone.DrawWidth,
+                 Right = rightContent.DrawWidth,
+             };
++
++            updateStarRatingVisibility();
++        }
++
++        /// <summary>
++        /// Patchsu: the beatmap's star rating with the play's mods (the same as selecting those mods now), from the shared difficulty cache.
++        /// </summary>
++        private void loadStarRating()
++        {
++            if (difficultyCache == null || Score.BeatmapInfo == null)
++                return;
++
++            difficultyCache.GetDifficultyAsync(Score.BeatmapInfo, Score.Ruleset, Score.Mods, starRatingCancellation.Token)
++                           .ContinueWith(t =>
++                           {
++                               if (t.IsCompletedSuccessfully && osu.Framework.Extensions.TaskExtensions.GetResultSafely(t) is osu.Game.Beatmaps.StarDifficulty stars)
++                                   Schedule(() =>
++                                   {
++                                       starRating.Current.Value = stars;
++                                       starRatingKnown = true;
++                                   });
++                           }, System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously);
++        }
++
++        /// <summary>
++        /// Patchsu: the star rating shows left of "Max Combo" (level with its caption) while the statistics show and the
++        /// date row still fits beside it.
++        /// </summary>
++        private void updateStarRatingVisibility()
++        {
++            float statisticsLeft = statisticsContainer.X - statisticsContainer.DrawWidth * statisticsContainer.Scale.X;
++            float starRatingWidth = starRating.DrawWidth * starRating.Scale.X + star_rating_spacing;
++            // avatar, then the name column's padding and the date row.
++            float freeWidth = centreContent.DrawWidth - centreContent.Padding.TotalHorizontal - HEIGHT - corner_radius * 2 + statisticsLeft;
++            bool show = starRatingKnown
++                        && currentMode != DisplayMode.Minimal
++                        && dateFlow.DrawWidth + starRatingWidth <= freeWidth;
++
++            var starParent = starRating.Parent!;
++            var caption = comboLabel.Caption;
++            float y = caption.ToSpaceOfOtherDrawable(caption.DrawSize / 2, starParent).Y - starParent.DrawHeight / 2;
++            var position = new Vector2(statisticsLeft - star_rating_spacing, y);
++
++            if (starRating.Position != position)
++                starRating.Position = position;
++
++            if (show == starRatingShown)
++                return;
++
++            starRatingShown = show;
++            starRating.FadeTo(show ? 1 : 0, transition_duration, Easing.OutQuint);
++        }
++
++        protected override void Dispose(bool isDisposing)
++        {
++            starRatingCancellation.Cancel();
++            base.Dispose(isDisposing);
+         }
+ 
+         private void updateDisplayMode(DisplayMode mode)
+@@ -669,6 +752,11 @@ private partial class ScoreComponentLabel : Container
+             private FillFlowContainer content = null!;
+             public override bool Contains(Vector2 screenSpacePos) => content.Contains(screenSpacePos);
+ 
++            /// <summary>
++            /// Patchsu: the label's caption ("MAX COMBO"), which the star rating lines up with.
++            /// </summary>
++            public Drawable Caption { get; private set; } = null!;
++
+             public ScoreComponentLabel(LocalisableString name, LocalisableString value, bool perfect, float minWidth)
+             {
+                 this.name = name;
+@@ -687,7 +775,7 @@ private void load(OsuColour colours, OverlayColourProvider colourProvider)
+                     Direction = FillDirection.Vertical,
+                     Children = new[]
+                     {
+-                        new OsuSpriteText
++                        Caption = new OsuSpriteText
+                         {
+                             Colour = colourProvider.Content2,
+                             Text = name,
+diff --git a/osu.Game/Screens/Select/BeatmapLeaderboardWedge.cs b/osu.Game/Screens/Select/BeatmapLeaderboardWedge.cs
+index 83b3842dc3..e193d51d54 100644
+--- a/osu.Game/Screens/Select/BeatmapLeaderboardWedge.cs
++++ b/osu.Game/Screens/Select/BeatmapLeaderboardWedge.cs
+@@ -47,6 +47,8 @@ public partial class BeatmapLeaderboardWedge : VisibilityContainer
+ 
+         public IBindable<LeaderboardSortMode> Sorting { get; } = new Bindable<LeaderboardSortMode>();
+ 
++        public IBindable<bool> SortReversed { get; } = new BindableBool();
++
+         public IBindable<bool> FilterBySelectedMods { get; } = new BindableBool();
+ 
+         [Resolved]
+@@ -214,6 +216,7 @@ protected override void LoadComplete()
+ 
+             Scope.BindValueChanged(_ => RefetchScores());
+             Sorting.BindValueChanged(_ => RefetchScores());
++            SortReversed.BindValueChanged(_ => RefetchScores());
+             FilterBySelectedMods.BindValueChanged(_ => RefetchScores());
+             beatmap.BindValueChanged(_ => RefetchScores());
+             ruleset.BindValueChanged(_ => RefetchScores());
+@@ -261,12 +264,13 @@ public void RefetchScores()
+             {
+                 var fetchBeatmapInfo = beatmap.Value.BeatmapInfo;
+                 var fetchRuleset = ruleset.Value ?? fetchBeatmapInfo.Ruleset;
+-                var fetchSorting = fetchScope == BeatmapLeaderboardScope.Local ? Sorting.Value : LeaderboardSortMode.Score;
++                // Patchsu: online scores are sorted locally too, so the chosen sort applies to every scope.
++                var fetchSorting = Sorting.Value;
+ 
+                 // For now, we forcefully refresh to keep things simple.
+                 // In the future, removing this requirement may be deemed useful, but will need ample testing of edge case scenarios
+                 // (like returning from gameplay after setting a new score, returning to song select after main menu).
+-                leaderboardManager.FetchWithCriteria(new LeaderboardCriteria(fetchBeatmapInfo, fetchRuleset, fetchScope, FilterBySelectedMods.Value ? mods.Value.ToArray() : null, fetchSorting),
++                leaderboardManager.FetchWithCriteria(new LeaderboardCriteria(fetchBeatmapInfo, fetchRuleset, fetchScope, FilterBySelectedMods.Value ? mods.Value.ToArray() : null, fetchSorting, SortReversed.Value),
+                     forceRefresh: true);
+ 
+                 if (!initialFetchComplete)
+diff --git a/osu.Game/Screens/Select/Filter/SortMode.cs b/osu.Game/Screens/Select/Filter/SortMode.cs
+index 5dd25d4846..3326cd4358 100644
+--- a/osu.Game/Screens/Select/Filter/SortMode.cs
++++ b/osu.Game/Screens/Select/Filter/SortMode.cs
+@@ -35,6 +35,10 @@ public enum SortMode
+         [LocalisableDescription(typeof(SongSelectStrings), nameof(SongSelectStrings.Length))]
+         Length,
+ 
++        // Patchsu: a shuffled order, like pressing F2 (random) over and over.
++        [System.ComponentModel.Description("Random")]
++        Random,
++
+         // // todo: pending support (https://github.com/ppy/osu/issues/4917)
+         // [LocalisableDescription(typeof(SongSelectStrings), nameof(SongSelectStrings.RankAchieved))]
+         // RankAchieved,
+diff --git a/osu.Game/Screens/Select/FilterControl.cs b/osu.Game/Screens/Select/FilterControl.cs
+index a8202987de..a8e0aa4f42 100644
+--- a/osu.Game/Screens/Select/FilterControl.cs
++++ b/osu.Game/Screens/Select/FilterControl.cs
+@@ -45,7 +45,7 @@ public sealed partial class FilterControl : OverlayContainer
+         private SongSelectSearchTextBox searchTextBox = null!;
+         private ShearedToggleButton showConvertedBeatmapsButton = null!;
+         private DifficultyRangeSlider difficultyRangeSlider = null!;
+-        private ShearedDropdown<SortMode> sortDropdown = null!;
++        private ReversibleShearedDropdown<SortMode> sortDropdown = null!;
+         private ShearedDropdown<GroupModeDropdownItem> groupDropdown = null!;
+         private readonly Bindable<string> configCollectionFilter = new Bindable<string>();
+ 
+@@ -186,7 +186,7 @@ private void load(IAPIProvider api)
+                                     {
+                                         new[]
+                                         {
+-                                            sortDropdown = new ShearedDropdown<SortMode>(SongSelectStrings.Sort)
++                                            sortDropdown = new ReversibleShearedDropdown<SortMode>(SongSelectStrings.Sort)
+                                             {
+                                                 RelativeSizeAxes = Axes.X,
+                                                 Items = Enum.GetValues<SortMode>(),
+@@ -226,6 +226,7 @@ protected override void LoadComplete()
+             difficultyRangeSlider.UpperBound = config.GetBindable<double>(OsuSetting.DisplayStarsMaximum);
+             config.BindWith(OsuSetting.ShowConvertedBeatmaps, showConvertedBeatmapsButton.Active);
+             config.BindWith(OsuSetting.SongSelectSortingMode, sortDropdown.Current);
++            config.BindWith(OsuSetting.SongSelectSortingReversed, sortDropdown.Reversed);
+             config.BindWith(OsuSetting.SongSelectCollectionFilter, configCollectionFilter);
+ 
+             ruleset.BindValueChanged(_ => updateCriteria());
+@@ -262,6 +263,7 @@ void debouncedUpdateCriteria()
+ 
+             showConvertedBeatmapsButton.Active.BindValueChanged(_ => updateCriteria());
+             sortDropdown.Current.BindValueChanged(_ => updateCriteria());
++            sortDropdown.Reversed.BindValueChanged(_ => updateCriteria());
+             groupDropdown.Current.BindValueChanged(_ => updateCriteria());
+             configCollectionFilter.BindValueChanged(_ => updateCriteria());
+             collectionsSubscription = realm.RegisterForNotifications(r => r.All<BeatmapCollection>(), (_, changeSet) =>
+@@ -300,6 +302,7 @@ public FilterCriteria CreateCriteria()
+             {
+                 SelectedBeatmapSet = ScopedBeatmapSet.Value,
+                 Sort = sortDropdown.Current.Value,
++                SortReversed = sortDropdown.Reversed.Value,
+                 Group = groupDropdown.Current.Value?.Value ?? GroupMode.None,
+                 AllowConvertedBeatmaps = showConvertedBeatmapsButton.Active.Value,
+                 Ruleset = ruleset.Value,
+@@ -402,7 +405,17 @@ public override bool OnPressed(KeyBindingPressEvent<PlatformAction> e)
+                 {
+                     // Conflicts with default group navigation keys (shift-left shift-right).
+                     if (e.Action == PlatformAction.SelectBackwardChar || e.Action == PlatformAction.SelectForwardChar)
++                    {
++                        // Patchsu: while there is search text, shift-left / shift-right move the caret by one character
++                        // (plain left / right change the selected beatmap). Group navigation still works with an empty search.
++                        if (HasFocus && !string.IsNullOrEmpty(Text))
++                        {
++                            MoveCursorBy(e.Action == PlatformAction.SelectBackwardChar ? -1 : 1);
++                            return true;
++                        }
++
+                         return false;
++                    }
+ 
+                     // the "cut" platform key binding (shift-delete) conflicts with the beatmap deletion action.
+                     if (e.Action == PlatformAction.Cut && e.ShiftPressed && e.CurrentState.Keyboard.Keys.IsPressed(Key.Delete))
+diff --git a/osu.Game/Screens/Select/FilterCriteria.cs b/osu.Game/Screens/Select/FilterCriteria.cs
+index 1c70132850..a45d785e75 100644
+--- a/osu.Game/Screens/Select/FilterCriteria.cs
++++ b/osu.Game/Screens/Select/FilterCriteria.cs
+@@ -20,6 +20,11 @@ public class FilterCriteria
+         public GroupMode Group;
+         public SortMode Sort;
+ 
++        /// <summary>
++        /// Patchsu: whether <see cref="Sort"/> is applied in reverse.
++        /// </summary>
++        public bool SortReversed;
++
+         public BeatmapSetInfo? SelectedBeatmapSet;
+ 
+         public OptionalRange<double> StarDifficulty;
+@@ -276,7 +281,7 @@ public string SearchTerm
+         /// <returns></returns>
+         public bool RequiresSorting(FilterCriteria newCriteria)
+         {
+-            if (Sort != newCriteria.Sort)
++            if (Sort != newCriteria.Sort || SortReversed != newCriteria.SortReversed)
+                 return true;
+ 
+             switch (Sort)
+@@ -290,6 +295,8 @@ public bool RequiresSorting(FilterCriteria newCriteria)
+                 case SortMode.DateRanked:
+                 case SortMode.Source:
+                 case SortMode.Title:
++                // Patchsu: the random order is fixed per beatmap (set), so filtering doesn't reshuffle it.
++                case SortMode.Random:
+                     return false;
+ 
+                 // Some sorts use aggregate max comparisons, which will change based on filtered items.
+diff --git a/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs b/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs
+index 8ed7ab585e..26caa5e6c6 100644
+--- a/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs
++++ b/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs
+@@ -74,6 +74,15 @@ private void load(OsuColour colours)
+                     if (item.Items.Any())
+                         continue;
+ 
++                    // Patchsu: "Play" (or "Select") and "Clear all local scores" are left out of this menu.
++                    // They stay available in the beatmap's right-click menu.
++                    if (item.Type == MenuItemType.Highlighted || item.Text.Value.Equals(SongSelectStrings.ClearAllLocalScores))
++                        continue;
++
++                    // don't start with a spacer (or show two in a row) after leaving items out.
++                    if (item is OsuMenuItemSpacer && buttonFlow.Children.LastOrDefault() is not OptionButton)
++                        continue;
++
+                     if (item is OsuMenuItemSpacer)
+                     {
+                         buttonFlow.Add(new Container

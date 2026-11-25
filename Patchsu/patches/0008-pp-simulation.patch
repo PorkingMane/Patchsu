@@ -1,0 +1,2544 @@
+Patchsu patch 8 (optional, standalone): PP simulation.
+
+Applies on its own to plain osu!lazer (commit 8cb6e6e68d), and also on top of 0001–0007.
+
+A results-screen panel (same layout as the expanded score panel) where every number can be typed into, to see
+what a play would be worth. osu! ruleset only.
+
+  Open it from:  song select → Options (F3 / footer button) → "Simulate PP": the selected difficulty with the
+                 selected mods, starting at SS.
+                 a leaderboard score → right-click → "Simulate PP": starts from that score (its mods, judgements,
+                 combo, slider ticks and ends).
+                 the results screen of a play → calculator button in the bottom row (next to collection /
+                 favourite): starts from the shown score. The panel takes over the one on screen: it starts
+                 exactly where the results panel was, with every number already shown (no entrance animation),
+                 and only slides into place. The results screen hides while the simulation is open.
+
+  Looks:         the numbers are the results screen's own rolling counters (same font, "98.76%" accuracy format,
+                 "/max" suffixes, PERFECT text, staggered entrance, PP dimmed with the tooltip on unranked maps/mods).
+                 Clicking a number (or Tab) swaps in a text box until you leave it; the counter then rolls to the value.
+
+  Editable:      accuracy, max combo, PP, 300 / 100 / 50 / miss, slider ticks, slider ends.
+                 Spinner spin / bonus are shown but not editable. Total score is recalculated (an estimate once
+                 anything changed), rank and the accuracy circle follow.
+
+Rules (everything updates on every keystroke):
+- 300 / 100 / 50 / miss always add up to the object count; changing one moves the difference to or from the 300s
+  (raising 300s takes from 100s, then 50s, then misses). Accuracy follows at once.
+- Judgements never change combo, slider ticks or slider ends. Each miss lowers the highest possible combo by 1,
+  each missed slider tick by 2, each missed slider end by 1. A combo that was at the limit follows it (also back up);
+  a lower combo stays. A typed combo above the limit is clamped right away. Exception: once an edit leaves no misses
+  and no missed slider ticks, the combo jumps to the limit (max combo minus dropped slider ends), so fixing a choke
+  is a single edit (setting misses to 0).
+- Typing accuracy or PP keeps misses, ticks, ends and combo and turns 300s into 100s (then, if 100s alone can't go
+  low enough, 100s into 50s) until the value is as close as it can get. The typed text stays while you type; the box
+  shows the real value once you leave it (Enter / click away / Tab). Tab and Shift+Tab move between boxes;
+  Tab with nothing selected starts at accuracy (Shift+Tab at the last box).
+
+Footer: the song select footer stays. Back and Mods stay in place, Random / Options slide down (and come back up
+on return). Mods opens the normal mod select, but for the simulation only (song select's mods are untouched); a mod
+change recalculates the simulation in place (the panel stays, the changed numbers like PP / score / stars roll)
+and keeps the typed judgements / ticks / ends / combo. On the right: "Reset to
+score" (only when opened from a score; also restores its mods), "Fix choke" (left click: misses become 100s, right
+click: misses become 300s; every slider tick is hit and the combo goes to its limit; 100s / 50s and slider ends
+stay), "Reset to SS" (keeps the mods), and the hint
+"Tab moves to the next one" in the corner.
+
+How it works (for later patches):
+- osu.Game/Screens/Ranking/Simulation: PerformanceSimulation (the rules and calculations, no UI),
+  PerformanceSimulationScreen (+ its static copy of the expanded ScorePanel), SimulationPanelMiddleContent
+  (copy of ExpandedPanelMiddleContent with EditableStatistic boxes), EditableStatistic / SimulationNumberBox.
+- PP: the ruleset's PerformanceCalculator with BeatmapDifficultyCache attributes (no pause penalty from 0006).
+  A stable score keeps its LegacyTotalScore (used for slider-break guessing) only while nothing was changed.
+- Total score: lazer's standardised formula with the combo part estimated from max combo and combo breaks,
+  calibrated against the real score when starting from one.
+- Footer: new IKeepsSharedFooterButtons marker. ScreenStackFooter forces the vertical transition when entering or
+  leaving such a screen, and ScreenFooter.SetButtons(…, keepMatchingLeftButtons) swaps leading left buttons of the
+  same type in place without animating (ScreenFooter.SuspendButtons blocks the old ones while the screen loads).
+- Entry points are small hunks in FooterButtonOptions.Popover.cs (after the forwarded actions loop),
+  BeatmapLeaderboardScore.cs (after "Copy link", before the replay-only items) and ResultsScreen.cs (after the
+  favourite button; SimulatePerformanceButton), placed away from 0002/0005's hunks.
+
+
+diff --git a/osu.Game/Screens/Footer/IKeepsSharedFooterButtons.cs b/osu.Game/Screens/Footer/IKeepsSharedFooterButtons.cs
+new file mode 100644
+index 0000000000..8203a9d68a
+--- /dev/null
++++ b/osu.Game/Screens/Footer/IKeepsSharedFooterButtons.cs
+@@ -0,0 +1,12 @@
++// Added by Patchsu
++
++namespace osu.Game.Screens.Footer
++{
++    /// <summary>
++    /// Patchsu: a screen whose footer keeps the left buttons it shares with the screen it is entered from (or returns to) in place,
++    /// while the other buttons slide down out of / up into the footer.
++    /// </summary>
++    public interface IKeepsSharedFooterButtons
++    {
++    }
++}
+diff --git a/osu.Game/Screens/Footer/ScreenFooter.cs b/osu.Game/Screens/Footer/ScreenFooter.cs
+index 2525db3744..b545c32901 100644
+--- a/osu.Game/Screens/Footer/ScreenFooter.cs
++++ b/osu.Game/Screens/Footer/ScreenFooter.cs
+@@ -213,7 +213,8 @@ protected override void PopOut()
+                 .FadeOut();
+         }
+ 
+-        public void SetButtons(IReadOnlyList<ScreenFooterButton> leftButtons, IReadOnlyList<ShearedButton> rightButtons, Direction direction)
++        // Patchsu: with keepMatchingLeftButtons, leading left buttons of the same type in the old and new set swap in place without animating, so they look like they stayed.
++        public void SetButtons(IReadOnlyList<ScreenFooterButton> leftButtons, IReadOnlyList<ShearedButton> rightButtons, Direction direction, bool keepMatchingLeftButtons = false)
+         {
+             overlays.Clear();
+ 
+@@ -222,18 +223,32 @@ public void SetButtons(IReadOnlyList<ScreenFooterButton> leftButtons, IReadOnlyL
+ 
+             var oldLeftButtons = leftButtonsFlow.ToArray();
+ 
++            int kept = 0;
++
++            if (keepMatchingLeftButtons)
++            {
++                while (kept < oldLeftButtons.Length && kept < leftButtons.Count && oldLeftButtons[kept].GetType() == leftButtons[kept].GetType())
++                    kept++;
++            }
++
+             for (int i = 0; i < oldLeftButtons.Length; i++)
+             {
+                 var oldButton = oldLeftButtons[i];
+                 oldButton.State.Value = Visibility.Hidden;
+ 
++                if (i < kept)
++                {
++                    leftButtonsFlow.Remove(oldButton, true);
++                    continue;
++                }
++
+                 leftButtonsFlow.Remove(oldButton, false);
+                 hiddenLeftButtonsContainer.Add(oldButton);
+ 
+                 if (direction == Direction.Horizontal)
+-                    makeButtonDisappearToRight(oldButton, i, oldLeftButtons.Length, true);
++                    makeButtonDisappearToRight(oldButton, i - kept, oldLeftButtons.Length - kept, true);
+                 else
+-                    makeButtonDisappearToBottom(oldButton, i, oldLeftButtons.Length, true);
++                    makeButtonDisappearToBottom(oldButton, i - kept, oldLeftButtons.Length - kept, true);
+             }
+ 
+             for (int i = 0; i < leftButtons.Count; i++)
+@@ -249,13 +264,16 @@ public void SetButtons(IReadOnlyList<ScreenFooterButton> leftButtons, IReadOnlyL
+                 Debug.Assert(!newButton.IsLoaded);
+                 leftButtonsFlow.Add(newButton);
+ 
+-                int index = i;
++                if (i < kept)
++                    continue;
++
++                int index = i - kept;
+ 
+                 // ensure transforms are added after LoadComplete to not be aborted by the FinishTransforms call.
+                 newButton.OnLoadComplete += _ =>
+                 {
+                     if (direction == Direction.Horizontal)
+-                        makeButtonAppearFromLeft(newButton, index, leftButtons.Count, 240);
++                        makeButtonAppearFromLeft(newButton, index, leftButtons.Count - kept, 240);
+                     else
+                         makeButtonAppearFromBottom(newButton, index);
+                 };
+@@ -296,6 +314,18 @@ public void SetButtons(IReadOnlyList<ScreenFooterButton> leftButtons, IReadOnlyL
+             }
+         }
+ 
++        /// <summary>
++        /// Patchsu: stops the current buttons from doing anything, without hiding them (used while the next screen loads).
++        /// </summary>
++        public void SuspendButtons()
++        {
++            foreach (var button in leftButtonsFlow)
++                button.State.Value = Visibility.Hidden;
++
++            foreach (var button in rightButtonsFlow)
++                button.Enabled.Value = false;
++        }
++
+         public ShearedOverlayContainer? ActiveOverlay { get; private set; }
+ 
+         private VisibilityContainer? activeOverlayContent;
+diff --git a/osu.Game/Screens/Footer/ScreenStackFooter.cs b/osu.Game/Screens/Footer/ScreenStackFooter.cs
+index 6c43b3398f..88363993f5 100644
+--- a/osu.Game/Screens/Footer/ScreenStackFooter.cs
++++ b/osu.Game/Screens/Footer/ScreenStackFooter.cs
+@@ -41,6 +41,11 @@ public partial class ScreenStackFooter : CompositeDrawable
+ 
+         private readonly ScreenStackTracker screenTracker;
+ 
++        /// <summary>
++        /// Patchsu: set on a screen change to or from an <see cref="IKeepsSharedFooterButtons"/> screen, consumed by the next footer update.
++        /// </summary>
++        private bool keepSharedButtons;
++
+         public ScreenStackFooter(ScreenStack screenStack, ScreenFooter.BackReceptor? backReceptor = null)
+         {
+             RelativeSizeAxes = Axes.Both;
+@@ -68,6 +73,8 @@ public ScreenStackFooter(ScreenStack screenStack, ScreenFooter.BackReceptor? bac
+ 
+         private void onScreenChanged(IScreen lastScreen, IScreen newScreen)
+         {
++            keepSharedButtons = lastScreen is IKeepsSharedFooterButtons || newScreen is IKeepsSharedFooterButtons;
++
+             unbindScreen(lastScreen);
+             bindScreen(newScreen);
+         }
+@@ -96,6 +103,9 @@ private void unbindScreen(IScreen screen)
+ 
+         private void footerContentChanged()
+         {
++            bool keepShared = keepSharedButtons;
++            keepSharedButtons = false;
++
+             switch (footerContent.Value.Mode)
+             {
+                 case ScreenFooterContent.FooterMode.None:
+@@ -126,22 +136,26 @@ private void footerContentChanged()
+                     // therefore settle for the next best thing. consumers who set the actions to return empty arrays have only themselves to blame.
+                     bool anyNewButtons = footerContent.Value.LeftButtons != null || footerContent.Value.RightButtons != null;
+ 
+-                    var direction = anyOldButtons && anyNewButtons ? Direction.Horizontal : Direction.Vertical;
++                    var direction = anyOldButtons && anyNewButtons && !keepShared ? Direction.Horizontal : Direction.Vertical;
+ 
+                     if (osuScreen.IsLoaded)
+-                        updateFooterButtons(osuScreen, direction);
++                        updateFooterButtons(osuScreen, direction, keepShared);
+                     else
+                     {
+                         // ensure the current buttons are immediately disabled on screen change (so they can't be pressed).
+-                        Footer.SetButtons([], [], direction);
++                        // Patchsu: buttons shared with the next screen stay on screen until it has loaded.
++                        if (keepShared)
++                            Footer.SuspendButtons();
++                        else
++                            Footer.SetButtons([], [], direction);
+ 
+-                        osuScreen.OnLoadComplete += _ => updateFooterButtons(osuScreen, direction);
++                        osuScreen.OnLoadComplete += _ => updateFooterButtons(osuScreen, direction, keepShared);
+                     }
+ 
+                     break;
+             }
+ 
+-            void updateFooterButtons(OsuScreen osuScreen, Direction direction)
++            void updateFooterButtons(OsuScreen osuScreen, Direction direction, bool keepSharedButtons)
+             {
+                 var leftButtons = footerContent.Value.LeftButtons?.Invoke().ToArray() ?? [];
+                 var rightButtons = footerContent.Value.RightButtons?.Invoke().ToArray() ?? [];
+@@ -149,7 +163,7 @@ void updateFooterButtons(OsuScreen osuScreen, Direction direction)
+                 osuScreen.LoadComponentsAgainstScreenDependencies(leftButtons);
+                 osuScreen.LoadComponentsAgainstScreenDependencies(rightButtons);
+ 
+-                Footer.SetButtons(leftButtons, rightButtons, direction);
++                Footer.SetButtons(leftButtons, rightButtons, direction, keepSharedButtons);
+                 Footer.Show();
+             }
+         }
+diff --git a/osu.Game/Screens/Ranking/ResultsScreen.cs b/osu.Game/Screens/Ranking/ResultsScreen.cs
+index 1d1bcc44b4..5e1627cd05 100644
+--- a/osu.Game/Screens/Ranking/ResultsScreen.cs
++++ b/osu.Game/Screens/Ranking/ResultsScreen.cs
+@@ -231,6 +231,39 @@ private void load(AudioManager audio)
+ 
+             if (Score?.BeatmapInfo?.BeatmapSet != null && Score.BeatmapInfo.BeatmapSet.OnlineID > 0)
+                 buttons.Add(new FavouriteButton(Score.BeatmapInfo.BeatmapSet));
++
++            // Patchsu: PP simulation, starting from the score that is shown.
++            if (Score?.BeatmapInfo != null && Simulation.PerformanceSimulationScreen.IsSupported(Score.Ruleset))
++                buttons.Add(new Simulation.SimulatePerformanceButton(openPerformanceSimulation));
++        }
++
++        private void openPerformanceSimulation()
++        {
++            var score = SelectedScore.Value ?? Score;
++
++            if (!this.IsCurrentScreen() || Score?.BeatmapInfo == null || score == null || !Simulation.PerformanceSimulationScreen.IsSupported(score.Ruleset))
++                return;
++
++            // the simulation's panel takes over from the shown one (same place, values already shown) instead of animating in again.
++            var shownPanel = ScorePanelList.GetScorePanels().FirstOrDefault(p => p.Score.Equals(score) && p.State == PanelState.Expanded);
++            this.Push(new Simulation.PerformanceSimulationScreen(Score.BeatmapInfo, score, shownPanel?.ScreenSpaceDrawQuad));
++
++            // this screen stays drawn underneath while suspended: hide it at once, so the panel doesn't show twice while the new one slides.
++            performanceSimulationOpen = true;
++            this.FadeOut();
++        }
++
++        private bool performanceSimulationOpen;
++
++        public override void OnResuming(ScreenTransitionEvent e)
++        {
++            base.OnResuming(e);
++
++            if (performanceSimulationOpen)
++            {
++                performanceSimulationOpen = false;
++                this.FadeIn(100);
++            }
+         }
+ 
+         protected override void LoadComplete()
+diff --git a/osu.Game/Screens/Ranking/Simulation/EditableStatistic.cs b/osu.Game/Screens/Ranking/Simulation/EditableStatistic.cs
+new file mode 100644
+index 0000000000..36293b47ae
+--- /dev/null
++++ b/osu.Game/Screens/Ranking/Simulation/EditableStatistic.cs
+@@ -0,0 +1,380 @@
++// Added by Patchsu
++
++using System;
++using osu.Framework.Allocation;
++using osu.Framework.Extensions.Color4Extensions;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Containers;
++using osu.Framework.Graphics.Cursor;
++using osu.Framework.Graphics.Sprites;
++using osu.Framework.Input;
++using osu.Framework.Input.Events;
++using osu.Framework.Localisation;
++using osu.Game.Graphics;
++using osu.Game.Graphics.Sprites;
++using osu.Game.Graphics.UserInterface;
++using osu.Game.Screens.Ranking.Expanded.Accuracy;
++using osu.Game.Screens.Ranking.Expanded.Statistics;
++using osu.Game.Utils;
++using osuTK;
++using osuTK.Graphics;
++using osuTK.Input;
++
++namespace osu.Game.Screens.Ranking.Simulation
++{
++    /// <summary>
++    /// Patchsu: a results screen statistic that can be typed into.
++    /// It shows the results screen's own rolling counter (same font, format and roll); clicking it (or Tab) swaps in a text box until focus leaves.
++    /// </summary>
++    public partial class EditableStatistic : StatisticDisplay, IHasTooltip
++    {
++        /// <summary>
++        /// Called with the text on every keystroke.
++        /// </summary>
++        public Action<string>? Typed;
++
++        /// <summary>
++        /// The value the counter rolls to.
++        /// </summary>
++        public Func<double> Value = () => 0;
++
++        /// <summary>
++        /// The text put into the box when editing starts.
++        /// </summary>
++        public Func<string> EditText = () => string.Empty;
++
++        /// <summary>
++        /// Text after the counter, like the results screen's "/123" maximums.
++        /// </summary>
++        public Func<string?>? SuffixText;
++
++        /// <summary>
++        /// Shows the value like the results screen's accuracy ("98.76%", not rounded up), and allows decimals.
++        /// </summary>
++        public bool IsAccuracy { get; init; }
++
++        public bool AllowDecimal { get; init; }
++
++        public Color4? HeaderColour { get; init; }
++
++        public LocalisableString TooltipText { get; set; }
++
++        public SimulationNumberBox Box { get; private set; } = null!;
++
++        private Drawable display = null!;
++        private Drawable counterDrawable = null!;
++        private OsuSpriteText? suffix;
++        private Drawable? extra;
++
++        private Action<double> setCounter = null!;
++        private bool appeared;
++        private bool updatingText;
++
++        public EditableStatistic(LocalisableString header)
++            : base(header)
++        {
++        }
++
++        /// <summary>
++        /// Something shown after the counter (like the combo's "PERFECT").
++        /// </summary>
++        public Drawable? Extra
++        {
++            init => extra = value;
++        }
++
++        protected override Drawable CreateContent()
++        {
++            Drawable counter;
++
++            if (IsAccuracy)
++            {
++                var accuracyCounter = new AccuracyCounter { Anchor = Anchor.TopCentre, Origin = Anchor.TopCentre };
++                setCounter = v => accuracyCounter.Current.Value = v;
++                counter = accuracyCounter;
++            }
++            else
++            {
++                var intCounter = new StatisticCounter { Anchor = Anchor.TopCentre, Origin = Anchor.TopCentre };
++                setCounter = v => intCounter.Current.Value = (int)Math.Round(v, MidpointRounding.AwayFromZero);
++                counter = intCounter;
++            }
++
++            // laid out like CounterStatistic / ComboStatistic.
++            var counterFlow = new FillFlowContainer
++            {
++                AutoSizeAxes = Axes.Both,
++                Direction = FillDirection.Horizontal,
++                Child = counterDrawable = counter,
++            };
++
++            if (SuffixText != null)
++            {
++                counterFlow.Add(suffix = new OsuSpriteText
++                {
++                    Anchor = Anchor.BottomCentre,
++                    Origin = Anchor.BottomCentre,
++                    Font = OsuFont.Torus.With(size: 12, fixedWidth: true),
++                    Spacing = new Vector2(-2, 0),
++                });
++            }
++
++            if (extra != null)
++            {
++                counterFlow.Anchor = counterFlow.Origin = Anchor.CentreLeft;
++                extra.Anchor = extra.Origin = Anchor.CentreLeft;
++
++                display = new FillFlowContainer
++                {
++                    AutoSizeAxes = Axes.Both,
++                    Direction = FillDirection.Horizontal,
++                    Spacing = new Vector2(10, 0),
++                    Children = new[] { counterFlow, extra },
++                };
++            }
++            else
++                display = counterFlow;
++
++            // only the number hides behind the box (the "/max" and PERFECT stay visible), and it stays laid out so nothing moves.
++            display.AlwaysPresent = true;
++            counter.AlwaysPresent = true;
++
++            return new Container
++            {
++                AutoSizeAxes = Axes.Both,
++                Children = new[]
++                {
++                    display,
++                    Box = new SimulationNumberBox(AllowDecimal || IsAccuracy)
++                    {
++                        // positioned in Update so its text sits exactly on the counter's text.
++                        Anchor = Anchor.TopLeft,
++                        Origin = Anchor.TopLeft,
++                        BypassAutoSizeAxes = Axes.Both,
++                        Alpha = 0,
++                        AlwaysPresent = true,
++                    },
++                }
++            };
++        }
++
++        protected override void LoadComplete()
++        {
++            base.LoadComplete();
++
++            if (HeaderColour != null)
++                HeaderText.Colour = HeaderColour.Value;
++
++            Box.Current.BindValueChanged(text =>
++            {
++                if (updatingText || !Box.HasFocus)
++                    return;
++
++                Typed?.Invoke(text.NewValue);
++            });
++
++            Box.Focused = () =>
++            {
++                SetText(EditText());
++                Box.Alpha = 1;
++                counterDrawable.Alpha = 0;
++            };
++
++            Box.FocusLost = () =>
++            {
++                Box.Alpha = 0;
++                counterDrawable.Alpha = 1;
++                Refresh();
++            };
++
++            Refresh();
++        }
++
++        protected override void Update()
++        {
++            base.Update();
++
++            // the typed number starts exactly where the counter's number starts (and grows to the right).
++            var counterTopLeft = counterDrawable.ToSpaceOfOtherDrawable(Vector2.Zero, Box.Parent!);
++            Box.X = counterTopLeft.X - Box.TextLeft;
++            Box.Y = counterTopLeft.Y - Box.TextTop;
++
++            // the box (and a typed number longer than the counter's) pushes the "/max" along instead of covering it.
++            if (suffix != null)
++            {
++                float push = Box.HasFocus ? Math.Max(0, Box.TextWidth - counterDrawable.DrawWidth) + Box.TextLeft : 0;
++
++                if (suffix.Margin.Left != push)
++                    suffix.Margin = new MarginPadding { Left = push };
++            }
++        }
++
++        protected override bool OnClick(ClickEvent e)
++        {
++            // anywhere on the statistic (like the "/max" part) starts editing too.
++            if (!Box.HasFocus && !Box.Current.Disabled)
++                GetContainingFocusManager()?.ChangeFocus(Box);
++
++            return true;
++        }
++
++        public override void Appear()
++        {
++            base.Appear();
++
++            appeared = true;
++            Refresh();
++        }
++
++        /// <summary>
++        /// Rolls the counter to the current value (once the statistic has appeared, like on the results screen).
++        /// </summary>
++        public void Refresh()
++        {
++            if (suffix != null)
++                suffix.Text = SuffixText?.Invoke() ?? string.Empty;
++
++            if (appeared)
++                setCounter(Value());
++        }
++
++        /// <summary>
++        /// Replaces the box's text without it counting as typing.
++        /// </summary>
++        public void SetText(string text)
++        {
++            if (Box.Text == text)
++                return;
++
++            updatingText = true;
++            Box.Text = text;
++            updatingText = false;
++        }
++
++        /// <summary>
++        /// The results screen's accuracy counter (<see cref="AccuracyStatistic"/>'s).
++        /// </summary>
++        private partial class AccuracyCounter : RollingCounter<double>
++        {
++            protected override double RollingDuration => AccuracyCircle.ACCURACY_TRANSFORM_DURATION / 2;
++            protected override Easing RollingEasing => Easing.OutQuad;
++
++            protected override LocalisableString FormatCount(double count) => count.FormatAccuracy();
++
++            protected override OsuSpriteText CreateSpriteText() => base.CreateSpriteText().With(s =>
++            {
++                s.Font = OsuFont.Torus.With(size: 20, fixedWidth: true);
++                s.Spacing = new Vector2(-2, 0);
++            });
++        }
++    }
++
++    /// <summary>
++    /// Patchsu: the text box of an <see cref="EditableStatistic"/>, in the results screen's number font. It sizes itself to its text.
++    /// </summary>
++    public partial class SimulationNumberBox : OsuTextBox
++    {
++        private const float font_size = 20;
++
++        private readonly bool allowDecimal;
++
++        /// <summary>
++        /// Called when Tab (or Shift+Tab) is pressed, with +1 or -1.
++        /// </summary>
++        public Action<SimulationNumberBox, int>? TabPressed;
++
++        public Action? Focused;
++
++        public Action? FocusLost;
++
++        /// <summary>
++        /// Where the text starts, from the top of the box.
++        /// </summary>
++        public float TextTop => (DrawHeight - TextContainer.DrawHeight) / 2;
++
++        /// <summary>
++        /// Where the text starts, from the left of the box.
++        /// </summary>
++        public float TextLeft => LeftRightPadding;
++
++        /// <summary>
++        /// The width of the typed text.
++        /// </summary>
++        public float TextWidth => measure.DrawWidth;
++
++        private OsuSpriteText measure = null!;
++
++        public SimulationNumberBox(bool allowDecimal = false)
++        {
++            this.allowDecimal = allowDecimal;
++
++            DrawBorder = false;
++            Height = font_size + 2;
++            TextContainer.Height = font_size / (font_size + 2);
++            CornerRadius = 4;
++            LengthLimit = 9;
++            SelectAllOnFocus = true;
++            CommitOnFocusLost = true;
++            // "Decimal" only accepts the system locale's separator, so decimals use plain text and CanAddCharacter does the filtering.
++            InputProperties = new TextInputProperties(allowDecimal ? TextInputType.Text : TextInputType.Number, false);
++            Width = 30;
++        }
++
++        protected override float LeftRightPadding => 4;
++
++        protected override FontUsage Font => OsuFont.Torus.With(size: font_size, fixedWidth: true);
++
++        protected override bool CanAddCharacter(char character) => char.IsAsciiDigit(character) || (allowDecimal && (character == '.' || character == ','));
++
++        [BackgroundDependencyLoader]
++        private void load()
++        {
++            BackgroundUnfocused = Color4.Black.Opacity(0);
++            BackgroundFocused = Color4.Black.Opacity(0.35f);
++            BackgroundCommit = Color4.White.Opacity(0.2f);
++
++            TextFlow.Spacing = new Vector2(-2, 0);
++
++            AddInternal(measure = new OsuSpriteText
++            {
++                Font = Font,
++                Spacing = new Vector2(-2, 0),
++                Alpha = 0,
++                AlwaysPresent = true,
++                BypassAutoSizeAxes = Axes.Both,
++            });
++        }
++
++        protected override void Update()
++        {
++            base.Update();
++
++            measure.Text = string.IsNullOrEmpty(Text) ? "0" : Text;
++            Width = measure.DrawWidth + LeftRightPadding * 2;
++        }
++
++        protected override bool OnKeyDown(KeyDownEvent e)
++        {
++            if (e.Key == Key.Tab && TabPressed != null)
++            {
++                TabPressed(this, e.ShiftPressed ? -1 : 1);
++                return true;
++            }
++
++            return base.OnKeyDown(e);
++        }
++
++        protected override void OnFocus(FocusEvent e)
++        {
++            // the text is set before the base selects all of it.
++            Focused?.Invoke();
++            base.OnFocus(e);
++        }
++
++        protected override void OnFocusLost(FocusLostEvent e)
++        {
++            base.OnFocusLost(e);
++            FocusLost?.Invoke();
++        }
++    }
++}
+diff --git a/osu.Game/Screens/Ranking/Simulation/PerformanceSimulation.cs b/osu.Game/Screens/Ranking/Simulation/PerformanceSimulation.cs
+new file mode 100644
+index 0000000000..f5580b2ba9
+--- /dev/null
++++ b/osu.Game/Screens/Ranking/Simulation/PerformanceSimulation.cs
+@@ -0,0 +1,568 @@
++// Added by Patchsu
++
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using osu.Framework.Logging;
++using osu.Game.Database;
++using osu.Game.Rulesets;
++using osu.Game.Rulesets.Difficulty;
++using osu.Game.Rulesets.Scoring;
++using osu.Game.Scoring;
++
++namespace osu.Game.Screens.Ranking.Simulation
++{
++    /// <summary>
++    /// Patchsu: the numbers behind the PP simulation screen.
++    /// Every edit goes through here, which keeps the judgements consistent with each other and recomputes accuracy, rank, score and PP.
++    /// </summary>
++    /// <remarks>
++    /// The rules (osu! ruleset):
++    /// <list type="bullet">
++    /// <item>Judgements (300 / 100 / 50 / miss) always add up to the number of objects. Changing one moves the difference to or from the 300s.</item>
++    /// <item>Judgements never change the combo, the slider ticks or the slider ends, but every miss lowers the highest possible combo by 1.</item>
++    /// <item>Every missed slider tick lowers the highest possible combo by 2, every missed slider end by 1.</item>
++    /// <item>Once a change leaves no misses and no missed slider ticks, the combo becomes the highest possible
++    /// (the max combo minus the dropped slider ends), so fixing a choke is one edit.</item>
++    /// <item>Typing an accuracy or a PP value keeps misses, slider ticks, slider ends and combo, and turns 300s into 100s
++    /// (and, if 100s alone can't go low enough, 100s into 50s) until the value is reached.</item>
++    /// </list>
++    /// </remarks>
++    public class PerformanceSimulation
++    {
++        /// <summary>
++        /// Raised after any value changed.
++        /// </summary>
++        public event Action? Changed;
++
++        /// <summary>
++        /// The simulated score. Its statistics, combo, accuracy, rank, total score and PP are kept up to date.
++        /// </summary>
++        public readonly ScoreInfo Score;
++
++        /// <summary>
++        /// The judgement counts of a perfect play on this beatmap with these mods.
++        /// </summary>
++        public readonly IReadOnlyDictionary<HitResult, int> Maximum;
++
++        /// <summary>
++        /// The highest combo the beatmap allows.
++        /// </summary>
++        public readonly int MaximumCombo;
++
++        /// <summary>
++        /// The number of basic judgements (300 / 100 / 50 / miss) in the beatmap.
++        /// </summary>
++        public readonly int BasicTotal;
++
++        /// <summary>
++        /// The basic judgements, best first (300, 100, 50, miss).
++        /// </summary>
++        public readonly IReadOnlyList<HitResult> BasicResults;
++
++        /// <summary>
++        /// The slider tick / slider end results present in this beatmap.
++        /// </summary>
++        public readonly IReadOnlyList<HitResult> TickResults;
++
++        /// <summary>
++        /// The calculated PP, or <see langword="null"/> if it can't be calculated (no difficulty attributes).
++        /// </summary>
++        public double? Performance { get; private set; }
++
++        public bool CanCalculatePerformance => performanceCalculator != null && attributes != null;
++
++        private readonly ScoreProcessor processor;
++        private readonly PerformanceCalculator? performanceCalculator;
++        private readonly DifficultyAttributes? attributes;
++        private readonly double scoreMultiplier;
++
++        private readonly HitResult topResult;
++        private readonly HitResult secondResult;
++        private readonly HitResult thirdResult;
++
++        private readonly Dictionary<HitResult, int> initialStatistics;
++        private readonly int initialCombo;
++        private readonly long initialTotalScore;
++        private readonly long? initialLegacyTotalScore;
++        private readonly double comboCalibration = 1;
++
++        /// <param name="template">The starting score (a saved score, or a perfect play). It is not modified.</param>
++        /// <param name="maximum">The judgement counts of a perfect play.</param>
++        /// <param name="attributes">The difficulty attributes for the beatmap and mods, used for PP.</param>
++        /// <param name="calibrateScore">Whether <paramref name="template"/>'s total score is a real one that the score estimate can be calibrated against.</param>
++        public PerformanceSimulation(ScoreInfo template, IReadOnlyDictionary<HitResult, int> maximum, DifficultyAttributes? attributes, bool calibrateScore)
++        {
++            Score = template.DeepClone();
++
++            // Cloning drops the score's built mods: without this, every read of Score.Mods (the PP calculator alone reads them many times
++            // per calculation) would build new mod instances.
++            Score.Mods = Score.Mods;
++            Maximum = new Dictionary<HitResult, int>(maximum);
++
++            Ruleset ruleset = Score.Ruleset.CreateInstance();
++
++            processor = ruleset.CreateScoreProcessor();
++            performanceCalculator = ruleset.CreatePerformanceCalculator();
++            this.attributes = attributes;
++
++            scoreMultiplier = Score.BeatmapInfo == null
++                ? 1
++                : ruleset.CreateScoreMultiplierCalculator(new ScoreMultiplierContext(Score.BeatmapInfo.Difficulty)).CalculateFor(Score.Mods);
++
++            MaximumCombo = Maximum.Where(kvp => kvp.Key.AffectsCombo()).Sum(kvp => kvp.Value);
++            BasicTotal = Maximum.Where(kvp => kvp.Key.IsBasic()).Sum(kvp => kvp.Value);
++
++            BasicResults = ruleset.GetHitResultsForDisplay()
++                                  .Select(r => r.result)
++                                  .Where(r => r.IsBasic())
++                                  .OrderByDescending(r => r.IsHit())
++                                  .ThenByDescending(processor.GetBaseScoreForResult)
++                                  .ToArray();
++
++            TickResults = ruleset.GetHitResultsForDisplay()
++                                 .Select(r => r.result)
++                                 .Where(r => missResultFor(r) != null && Maximum.GetValueOrDefault(r) > 0)
++                                 .ToArray();
++
++            var hits = BasicResults.Where(r => r.IsHit()).ToArray();
++            topResult = hits.ElementAtOrDefault(0);
++            secondResult = hits.ElementAtOrDefault(1);
++            thirdResult = hits.ElementAtOrDefault(2);
++
++            initialStatistics = new Dictionary<HitResult, int>(Score.Statistics);
++            initialCombo = Score.MaxCombo;
++            initialTotalScore = Score.TotalScore;
++            initialLegacyTotalScore = Score.LegacyTotalScore;
++
++            if (calibrateScore && !Score.IsLegacyScore && Score.TotalScore > 0 && scoreMultiplier > 0)
++            {
++                // Lazer's score depends on where in the map the combo breaks happened, which a list of counts can't tell.
++                // The estimate below is calibrated so the score's own statistics give back its real total score.
++                double accuracy = computeAccuracy();
++                double realComboProgress = (Score.TotalScore / scoreMultiplier - bonusPortion() - 500000 * Math.Pow(accuracy, 5)) / (500000 * accuracy);
++                double estimatedComboProgress = estimateComboProgress();
++
++                if (accuracy > 0 && estimatedComboProgress > 0 && realComboProgress > 0)
++                    comboCalibration = Math.Clamp(realComboProgress / estimatedComboProgress, 0.5, 2);
++            }
++
++            recalculate(notify: false);
++        }
++
++        public int Get(HitResult result) => Score.Statistics.GetValueOrDefault(result);
++
++        public int GetMaximum(HitResult result) => Maximum.GetValueOrDefault(result);
++
++        public int Combo => Score.MaxCombo;
++
++        public double Accuracy => Score.Accuracy;
++
++        public bool IsModified => Score.MaxCombo != initialCombo || !statisticsEqual(Score.Statistics, initialStatistics);
++
++        /// <summary>
++        /// The highest combo still possible with the current misses, slider tick misses and slider end misses.
++        /// </summary>
++        public int ComboCap
++        {
++            get
++            {
++                int loss = Get(HitResult.Miss);
++
++                foreach (var tick in TickResults)
++                    loss += (GetMaximum(tick) - Get(tick)) * (tick == HitResult.LargeTickHit ? 2 : 1);
++
++                return Math.Max(0, MaximumCombo - loss);
++            }
++        }
++
++        /// <summary>
++        /// Whether nothing breaks the combo: no misses and no missed slider ticks (dropped slider ends don't break it).
++        /// </summary>
++        public bool HasNoComboBreaks => Get(HitResult.Miss) == 0 && Get(HitResult.LargeTickHit) >= GetMaximum(HitResult.LargeTickHit);
++
++        /// <summary>
++        /// Sets a judgement count (300 / 100 / 50 / miss) or a slider tick / slider end hit count.
++        /// </summary>
++        /// <returns>The value that was actually applied after clamping.</returns>
++        public int SetCount(HitResult result, int value)
++        {
++            if (BasicResults.Contains(result))
++                changeKeepingCombo(() => setBasic(result, value));
++            else if (TickResults.Contains(result))
++                changeKeepingCombo(() => setTick(result, value));
++
++            return Get(result);
++        }
++
++        /// <returns>The value that was actually applied after clamping.</returns>
++        public int SetCombo(int value)
++        {
++            Score.MaxCombo = Math.Clamp(value, 0, ComboCap);
++            recalculate();
++            return Score.MaxCombo;
++        }
++
++        /// <summary>
++        /// Moves 300s / 100s / 50s until the accuracy is as close as possible to <paramref name="accuracy"/> (0..1).
++        /// </summary>
++        public void SetAccuracy(double accuracy)
++        {
++            accuracy = Math.Clamp(accuracy, 0, 1);
++            distribute(computeAccuracy, accuracy);
++        }
++
++        /// <summary>
++        /// Moves 300s / 100s / 50s until the PP is as close as possible to <paramref name="performance"/>.
++        /// </summary>
++        public void SetPerformance(double performance)
++        {
++            if (!CanCalculatePerformance)
++                return;
++
++            distribute(() => computePerformance() ?? 0, Math.Max(0, performance));
++        }
++
++        /// <summary>
++        /// Goes back to the starting values.
++        /// </summary>
++        public void Reset()
++        {
++            Score.Statistics = new Dictionary<HitResult, int>(initialStatistics);
++            Score.MaxCombo = initialCombo;
++            recalculate();
++        }
++
++        /// <summary>
++        /// Whether every judgement, slider tick and slider end is perfect and the combo is full.
++        /// </summary>
++        public bool IsPerfect => Score.MaxCombo >= MaximumCombo
++                                 && (topResult == default || Get(topResult) >= BasicTotal)
++                                 && TickResults.All(t => Get(t) >= GetMaximum(t));
++
++        /// <summary>
++        /// Sets everything to a perfect play (spinner bonus is left as it is).
++        /// </summary>
++        public void SetPerfect()
++        {
++            foreach (var tick in TickResults)
++                setTick(tick, GetMaximum(tick));
++
++            if (topResult != default)
++                setBasic(topResult, BasicTotal);
++
++            Score.MaxCombo = MaximumCombo;
++            recalculate();
++        }
++
++        /// <summary>
++        /// Whether there is nothing left for <see cref="FixChoke"/> to fix: no misses, every slider tick hit and the combo at its limit.
++        /// </summary>
++        public bool IsChokeFixed => Get(HitResult.Miss) == 0
++                                    && Get(HitResult.LargeTickHit) >= GetMaximum(HitResult.LargeTickHit)
++                                    && Score.MaxCombo >= ComboCap;
++
++        /// <summary>
++        /// The play without its chokes: every miss becomes a 100 (or a 300 with <paramref name="missesBecomeGreat"/>),
++        /// every slider tick is hit and the combo goes to its limit. 100s, 50s and slider ends stay as they are.
++        /// </summary>
++        public void FixChoke(bool missesBecomeGreat)
++        {
++            if (TickResults.Contains(HitResult.LargeTickHit))
++                setTick(HitResult.LargeTickHit, GetMaximum(HitResult.LargeTickHit));
++
++            int misses = Get(HitResult.Miss);
++
++            if (topResult != default && misses > 0 && BasicResults.Contains(HitResult.Miss))
++            {
++                // the misses go to the 300s first; as 100s they're then taken back from there.
++                setBasic(HitResult.Miss, 0);
++
++                if (!missesBecomeGreat && secondResult != default)
++                    setBasic(secondResult, Get(secondResult) + misses);
++            }
++
++            Score.MaxCombo = ComboCap;
++            recalculate();
++        }
++
++        /// <summary>
++        /// Copies the judgements, slider ticks, slider ends and combo of another simulation of the same beatmap (with other mods),
++        /// as far as they fit this one.
++        /// </summary>
++        public void CopyFrom(PerformanceSimulation other)
++        {
++            foreach (var tick in TickResults)
++                setTick(tick, other.GetMaximum(tick) > 0 ? other.Get(tick) : GetMaximum(tick));
++
++            foreach (var result in BasicResults.Where(r => r != topResult))
++                setBasic(result, other.Get(result));
++
++            Score.MaxCombo = other.Combo >= other.ComboCap ? ComboCap : Math.Clamp(other.Combo, 0, ComboCap);
++            recalculate();
++        }
++
++        private void setBasic(HitResult result, int value)
++        {
++            var statistics = Score.Statistics;
++
++            if (result == topResult)
++            {
++                value = Math.Clamp(value, 0, BasicTotal);
++                int diff = value - Get(topResult);
++
++                if (diff > 0)
++                {
++                    // More 300s: take them from the 100s first, then the 50s, then the misses.
++                    foreach (var other in BasicResults.Where(r => r != topResult))
++                    {
++                        int take = Math.Min(diff, Get(other));
++                        statistics[other] = Get(other) - take;
++                        diff -= take;
++                    }
++                }
++                else if (diff < 0)
++                {
++                    // Fewer 300s: they become 100s.
++                    HitResult target = secondResult != default ? secondResult : BasicResults.Last();
++                    statistics[target] = Get(target) - diff;
++                }
++
++                statistics[topResult] = value;
++                return;
++            }
++
++            int others = BasicResults.Where(r => r != topResult && r != result).Sum(Get);
++            value = Math.Clamp(value, 0, Math.Max(0, BasicTotal - others));
++
++            statistics[result] = value;
++            statistics[topResult] = BasicTotal - others - value;
++        }
++
++        private void setTick(HitResult result, int value)
++        {
++            int max = GetMaximum(result);
++            value = Math.Clamp(value, 0, max);
++
++            Score.Statistics[result] = value;
++
++            HitResult? miss = missResultFor(result);
++
++            if (miss != null && miss != HitResult.IgnoreMiss)
++                Score.Statistics[miss.Value] = max - value;
++        }
++
++        /// <summary>
++        /// Applies a change, then limits the combo to the new <see cref="ComboCap"/>.
++        /// A combo that was at the cap follows it (so removing a miss again gives the combo back),
++        /// and with nothing left that breaks the combo it goes to the cap (fixing a choke).
++        /// </summary>
++        private void changeKeepingCombo(Action change)
++        {
++            int capBefore = ComboCap;
++            bool atCap = Score.MaxCombo >= capBefore;
++
++            change();
++
++            int cap = ComboCap;
++            Score.MaxCombo = atCap || HasNoComboBreaks ? cap : Math.Min(Score.MaxCombo, cap);
++
++            recalculate();
++        }
++
++        /// <summary>
++        /// Keeps misses, ticks, slider ends and combo, and finds the split of the remaining judgements into 300s / 100s / 50s
++        /// whose <paramref name="metric"/> is closest to <paramref name="target"/>.
++        /// </summary>
++        /// <remarks>
++        /// Step k (0..2n, n = judgements that aren't misses): k ≤ n gives k 100s, k &gt; n gives no 300s and k - n 50s (the rest 100s).
++        /// The metric only goes down as k goes up, so a binary search finds it.
++        /// </remarks>
++        private void distribute(Func<double> metric, double target)
++        {
++            if (topResult == default)
++                return;
++
++            // the real-score slider break guess of stable scores doesn't apply to changed judgements.
++            Score.LegacyTotalScore = null;
++
++            int misses = BasicResults.Where(r => !r.IsHit()).Sum(Get);
++            int n = Math.Max(0, BasicTotal - misses);
++            int maxStep = secondResult == default ? 0 : thirdResult == default ? n : 2 * n;
++
++            double valueAt(int k)
++            {
++                applyStep(k, n);
++                Score.Accuracy = computeAccuracy();
++                return metric();
++            }
++
++            int step;
++
++            if (valueAt(0) <= target)
++                step = 0;
++            else if (valueAt(maxStep) >= target)
++                step = maxStep;
++            else
++            {
++                // smallest k with value <= target.
++                int lo = 0, hi = maxStep;
++
++                while (hi - lo > 1)
++                {
++                    int mid = (lo + hi) / 2;
++
++                    if (valueAt(mid) <= target)
++                        hi = mid;
++                    else
++                        lo = mid;
++                }
++
++                step = Math.Abs(valueAt(lo) - target) <= Math.Abs(valueAt(hi) - target) ? lo : hi;
++            }
++
++            applyStep(step, n);
++            recalculate();
++        }
++
++        private void applyStep(int k, int n)
++        {
++            int ok = k <= n ? k : 2 * n - k;
++            int meh = k <= n ? 0 : k - n;
++
++            Score.Statistics[topResult] = n - ok - meh;
++
++            if (secondResult != default)
++                Score.Statistics[secondResult] = ok;
++
++            if (thirdResult != default)
++                Score.Statistics[thirdResult] = meh;
++        }
++
++        private void recalculate(bool notify = true)
++        {
++            bool modified = IsModified;
++
++            Score.Accuracy = computeAccuracy();
++            Score.Rank = StandardisedScoreMigrationTools.ComputeRank(Score.Accuracy, Score.Statistics, Score.Mods, processor);
++            Score.Passed = true;
++
++            // A stable score's PP uses its real score to guess the slider breaks; that only fits while nothing was changed.
++            Score.LegacyTotalScore = modified ? null : initialLegacyTotalScore;
++            Score.TotalScore = modified || initialTotalScore <= 0 ? estimateTotalScore() : initialTotalScore;
++
++            Performance = computePerformance();
++            Score.PP = Performance;
++
++            if (notify)
++                Changed?.Invoke();
++        }
++
++        private double computeAccuracy() => StandardisedScoreMigrationTools.ComputeAccuracy(Score.Statistics, Maximum, processor);
++
++        private double? computePerformance()
++        {
++            if (performanceCalculator == null || attributes == null)
++                return null;
++
++            try
++            {
++                double pp = performanceCalculator.Calculate(Score, attributes).Total;
++                return double.IsFinite(pp) ? pp : null;
++            }
++            catch (Exception e)
++            {
++                Logger.Log($"PP simulation: performance calculation failed ({e.Message})", LoggingTarget.Runtime, LogLevel.Debug);
++                return null;
++            }
++        }
++
++        private double bonusPortion() => Score.Statistics.Where(kvp => kvp.Key.IsBonus()).Sum(kvp => (double)kvp.Value * processor.GetBaseScoreForResult(kvp.Key));
++
++        /// <summary>
++        /// Lazer's standardised score: 500,000 × accuracy × combo progress + 500,000 × accuracy⁵ + bonus, times the mod multiplier.
++        /// The combo progress is estimated from the max combo and the number of combo breaks.
++        /// </summary>
++        private long estimateTotalScore()
++        {
++            double accuracy = Score.Accuracy;
++            double comboProgress = Math.Clamp(estimateComboProgress() * comboCalibration, 0, 1);
++
++            if (Score.MaxCombo >= MaximumCombo)
++                comboProgress = 1;
++
++            double total = 500000 * accuracy * comboProgress + 500000 * Math.Pow(accuracy, 5) + bonusPortion();
++            return (long)Math.Round(total * scoreMultiplier);
++        }
++
++        /// <summary>
++        /// The combo part of the score is the sum of √combo over every object. This assumes one stretch at the max combo
++        /// and the other objects split evenly between the combo breaks.
++        /// </summary>
++        private double estimateComboProgress()
++        {
++            int total = MaximumCombo;
++
++            if (total <= 0)
++                return 1;
++
++            int maxCombo = Math.Clamp(Score.MaxCombo, 0, total);
++
++            int breaks = Get(HitResult.Miss) + Get(HitResult.LargeTickMiss);
++            int lost = MaximumCombo - ComboCap - Get(HitResult.LargeTickMiss); // objects that give no combo (a tick miss counts once here)
++            int rest = Math.Max(0, total - maxCombo - Math.Max(0, lost));
++
++            double sum = sqrtSum(maxCombo);
++
++            if (rest > 0)
++            {
++                int segments = Math.Max(1, breaks);
++                double length = Math.Max(1, Math.Min((double)rest / segments, Math.Max(1, maxCombo)));
++                sum += sqrtSum(length) * (rest / length);
++            }
++
++            return Math.Clamp(sum / sqrtSum(total), 0, 1);
++        }
++
++        /// <summary>
++        /// ≈ √1 + √2 + … + √n.
++        /// </summary>
++        private static double sqrtSum(double n) => n <= 0 ? 0 : Math.Max(0, 2.0 / 3 * Math.Pow(n, 1.5) + 0.5 * Math.Sqrt(n) - 0.2079);
++
++        private static HitResult? missResultFor(HitResult result)
++        {
++            switch (result)
++            {
++                case HitResult.LargeTickHit:
++                    return HitResult.LargeTickMiss;
++
++                case HitResult.SmallTickHit:
++                    return HitResult.SmallTickMiss;
++
++                case HitResult.SliderTailHit:
++                    return HitResult.IgnoreMiss;
++
++                default:
++                    return null;
++            }
++        }
++
++        private static bool statisticsEqual(Dictionary<HitResult, int> a, Dictionary<HitResult, int> b)
++        {
++            // Read every frame (footer buttons), so without allocating.
++            foreach (var (key, value) in a)
++            {
++                if (b.GetValueOrDefault(key) != value)
++                    return false;
++            }
++
++            foreach (var (key, value) in b)
++            {
++                if (a.GetValueOrDefault(key) != value)
++                    return false;
++            }
++
++            return true;
++        }
++    }
++}
+diff --git a/osu.Game/Screens/Ranking/Simulation/PerformanceSimulationScreen.cs b/osu.Game/Screens/Ranking/Simulation/PerformanceSimulationScreen.cs
+new file mode 100644
+index 0000000000..dd74e18c53
+--- /dev/null
++++ b/osu.Game/Screens/Ranking/Simulation/PerformanceSimulationScreen.cs
+@@ -0,0 +1,670 @@
++// Added by Patchsu
++
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Threading;
++using System.Threading.Tasks;
++using osu.Framework.Bindables;
++using osu.Framework.Allocation;
++using osu.Framework.Extensions;
++using osu.Framework.Extensions.Color4Extensions;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Colour;
++using osu.Framework.Graphics.Containers;
++using osu.Framework.Graphics.Primitives;
++using osu.Framework.Graphics.Shapes;
++using osu.Framework.Graphics.Sprites;
++using osu.Framework.Input.Events;
++using osu.Framework.Localisation;
++using osu.Framework.Logging;
++using osu.Framework.Screens;
++using osu.Framework.Threading;
++using osu.Game.Beatmaps;
++using osu.Game.Configuration;
++using osu.Game.Database;
++using osu.Game.Graphics;
++using osu.Game.Graphics.Containers;
++using osu.Game.Graphics.Sprites;
++using osu.Game.Graphics.UserInterface;
++using osu.Game.Input.Bindings;
++using osu.Game.Online.API;
++using osu.Game.Overlays;
++using osu.Game.Overlays.Mods;
++using osu.Game.Rulesets;
++using osu.Game.Rulesets.Mods;
++using osu.Game.Rulesets.Scoring;
++using osu.Game.Scoring;
++using osu.Game.Screens.Footer;
++using osu.Game.Screens.Play;
++using osu.Game.Screens.Select;
++using osu.Game.Screens.Ranking.Expanded;
++using osu.Game.Users;
++using osuTK;
++using osuTK.Graphics;
++using osuTK.Input;
++
++namespace osu.Game.Screens.Ranking.Simulation
++{
++    /// <summary>
++    /// Patchsu: a results screen whose numbers can be typed into, to see what PP a play would give.
++    /// Opened from song select's options menu (the selected beatmap and mods, starting at SS) or a leaderboard score's right-click menu (that score).
++    /// </summary>
++    public partial class PerformanceSimulationScreen : ScreenWithBeatmapBackground, IKeepsSharedFooterButtons
++    {
++        private const float background_blur = 10;
++
++        public override bool DisallowExternalBeatmapRulesetChanges => true;
++
++        public override bool? AllowGlobalTrackControl => true;
++
++        [Cached]
++        private OverlayColourProvider colourProvider = new OverlayColourProvider(OverlayColourScheme.Aquamarine);
++
++        [Resolved]
++        private BeatmapManager beatmaps { get; set; } = null!;
++
++        [Resolved]
++        private BeatmapDifficultyCache difficultyCache { get; set; } = null!;
++
++        [Resolved]
++        private ScoreManager scoreManager { get; set; } = null!;
++
++        [Resolved]
++        private IAPIProvider api { get; set; } = null!;
++
++        [Resolved]
++        private IOverlayManager? overlayManager { get; set; }
++
++        private readonly BeatmapInfo beatmapInfo;
++        private readonly ScoreInfo? sourceScore;
++
++        /// <summary>
++        /// Where the results screen's panel was (screen space) when this was opened from it, so this panel can take over from it.
++        /// </summary>
++        private readonly Quad? arrivingFrom;
++
++        private RulesetInfo rulesetInfo = null!;
++
++        private PerformanceSimulation? simulation;
++
++        /// <summary>
++        /// The mods being simulated. Separate from the game's selected mods, which song select keeps.
++        /// </summary>
++        private readonly Bindable<IReadOnlyList<Mod>> simulationMods = new Bindable<IReadOnlyList<Mod>>(Array.Empty<Mod>());
++
++        /// <summary>
++        /// The mods of the simulation shown. Whether they match the score's own mods is kept up to date here
++        /// (the footer buttons are updated every frame, without comparing mods each time).
++        /// </summary>
++        private Mod[] simulatedMods
++        {
++            get => simulatedModsValue;
++            set
++            {
++                simulatedModsValue = value;
++                simulatedModsAreScoreMods = sourceScore != null && sameModsAndSettings(value, sourceMods);
++            }
++        }
++
++        private Mod[] simulatedModsValue = Array.Empty<Mod>();
++        private bool simulatedModsAreScoreMods;
++
++        /// <summary>
++        /// The score's mods, built once (reading <see cref="ScoreInfo.Mods"/> of a detached score builds new mod instances every time).
++        /// </summary>
++        private readonly Mod[] sourceMods;
++
++        private ModSelectOverlay modSelectOverlay = null!;
++        private IDisposable? modSelectOverlayRegistration;
++        private ModSettingChangeTracker? modSettingChangeTracker;
++        private ScheduledDelegate? modSettingRebuild;
++
++        private Container panelContainer = null!;
++
++        private ShearedButton? resetToScoreButton;
++        private ShearedButton? fixChokeButton;
++        private ShearedButton? resetToPerfectButton;
++
++        private CancellationTokenSource? rebuildCancellation;
++
++        /// <summary>
++        /// The simulation's rules (judgement counts, slider ticks / ends) are written for osu!.
++        /// </summary>
++        public static bool IsSupported(IRulesetInfo? ruleset) => ruleset?.OnlineID == 0;
++
++        /// <param name="beatmapInfo">The beatmap to simulate a play on.</param>
++        /// <param name="score">A score to start from, or <see langword="null"/> to start from SS with the selected mods.</param>
++        /// <param name="arrivingFrom">The screen-space quad of the results panel showing <paramref name="score"/>, when opened from the
++        /// results screen: the panel then starts there with its values shown and only slides into place (no entrance animation).</param>
++        public PerformanceSimulationScreen(BeatmapInfo beatmapInfo, ScoreInfo? score = null, Quad? arrivingFrom = null)
++        {
++            this.arrivingFrom = arrivingFrom;
++
++            // the screen loads on a background thread, so it can't hold on to live realm objects.
++            this.beatmapInfo = beatmapInfo.Detach();
++            sourceScore = score?.Detach();
++            sourceMods = sourceScore?.Mods ?? Array.Empty<Mod>();
++
++            FooterContent.Value = ScreenFooterContent.Argon(leftButtons: createLeftButtons, rightButtons: createRightButtons);
++        }
++
++        [BackgroundDependencyLoader]
++        private void load()
++        {
++            rulesetInfo = sourceScore?.Ruleset ?? Ruleset.Value;
++            simulatedMods = (sourceScore != null ? sourceMods : Mods.Value.ToArray()).Select(m => m.DeepClone()).ToArray();
++            simulationMods.Value = simulatedMods;
++
++            StarDifficulty? difficulty = difficultyCache.GetDifficultyAsync(beatmapInfo, rulesetInfo, simulatedMods).GetResultSafely();
++            simulation = createSimulation(simulatedMods, difficulty);
++
++            LoadComponent(modSelectOverlay = new UserModSelectOverlay { ShowPresets = true });
++
++            InternalChild = new Container
++            {
++                RelativeSizeAxes = Axes.Both,
++                Padding = new MarginPadding { Bottom = ScreenFooter.HEIGHT },
++                Child = new OsuScrollContainer
++                {
++                    RelativeSizeAxes = Axes.Both,
++                    ScrollbarVisible = false,
++                    Child = new Container
++                    {
++                        RelativeSizeAxes = Axes.X,
++                        Height = 768 - ScreenFooter.HEIGHT,
++                        Child = panelContainer = new Container
++                        {
++                            RelativeSizeAxes = Axes.Both,
++                            Child = createPanel(simulation, difficulty, arrivingFrom != null),
++                        }
++                    }
++                }
++            };
++        }
++
++        protected override void LoadComplete()
++        {
++            base.LoadComplete();
++
++            modSelectOverlayRegistration = overlayManager?.RegisterBlockingOverlay(modSelectOverlay);
++
++            if (arrivingFrom is Quad from && panelContainer.Child is Drawable panel)
++            {
++                // take over from the results panel: start where it was and slide to this screen's spot (the panels differ in height).
++                ScheduleAfterChildren(() =>
++                {
++                    panel.Position = panelContainer.ToLocalSpace(from.TopLeft) - panelContainer.ToLocalSpace(panel.ScreenSpaceDrawQuad.TopLeft);
++                    panel.MoveTo(Vector2.Zero, 400, Easing.OutQuint);
++                });
++            }
++
++            simulationMods.BindValueChanged(mods =>
++            {
++                modSettingChangeTracker?.Dispose();
++                modSettingChangeTracker = new ModSettingChangeTracker(mods.NewValue)
++                {
++                    // a slider being dragged changes the setting many times, the simulation only needs the final value.
++                    SettingChanged = _ =>
++                    {
++                        modSettingRebuild?.Cancel();
++                        modSettingRebuild = Scheduler.AddDelayed(() => rebuild(simulationMods.Value, false), 300);
++                    }
++                };
++
++                rebuild(mods.NewValue, false);
++            }, true);
++        }
++
++        private IEnumerable<ScreenFooterButton> createLeftButtons() =>
++        [
++            new FooterButtonMods(modSelectOverlay)
++            {
++                Hotkey = GlobalAction.ToggleModSelection,
++                Mods = simulationMods,
++                Ruleset = Ruleset,
++                RequestDeselectAllMods = () =>
++                {
++                    if (modSelectOverlay.State.Value == Visibility.Visible)
++                        modSelectOverlay.DeselectAll();
++                    else
++                        simulationMods.Value = Array.Empty<Mod>();
++                }
++            },
++        ];
++
++        private IEnumerable<ShearedButton> createRightButtons()
++        {
++            if (sourceScore != null)
++            {
++                yield return resetToScoreButton = new ShearedButtonWithIcon
++                {
++                    Width = 180,
++                    Text = "Reset to score",
++                    Icon = FontAwesome.Solid.Undo,
++                    Action = resetToScore,
++                };
++            }
++
++            yield return fixChokeButton = new FixChokeButton
++            {
++                Width = 150,
++                Text = "Fix choke",
++                Icon = FontAwesome.Solid.Wrench,
++                FixChoke = missesBecomeGreat => simulation?.FixChoke(missesBecomeGreat),
++            };
++
++            yield return resetToPerfectButton = new ShearedButtonWithIcon
++            {
++                Width = 160,
++                Text = "Reset to SS",
++                Icon = FontAwesome.Solid.Star,
++                Action = () => simulation?.SetPerfect(),
++            };
++
++            yield return new HintButton("Tab moves to the next one");
++        }
++
++        protected override void Update()
++        {
++            base.Update();
++
++            // the footer turns its buttons on whenever it shows them, so their state is kept here.
++            if (resetToScoreButton != null && resetToScoreButton.Enabled.Value != canResetToScore)
++                resetToScoreButton.Enabled.Value = canResetToScore;
++
++            bool canFixChoke = simulation?.IsChokeFixed == false;
++
++            if (fixChokeButton != null && fixChokeButton.Enabled.Value != canFixChoke)
++                fixChokeButton.Enabled.Value = canFixChoke;
++
++            bool canResetToPerfect = simulation?.IsPerfect == false;
++
++            if (resetToPerfectButton != null && resetToPerfectButton.Enabled.Value != canResetToPerfect)
++                resetToPerfectButton.Enabled.Value = canResetToPerfect;
++        }
++
++        private bool canResetToScore => sourceScore != null && simulation != null && (simulation.IsModified || !simulatedModsAreScoreMods);
++
++        private void resetToScore()
++        {
++            if (sourceScore == null || simulation == null)
++                return;
++
++            if (sameModsAndSettings(simulationMods.Value, sourceMods))
++            {
++                // the mods are back, but the simulation may still be one built while they were different.
++                if (simulatedModsAreScoreMods)
++                    simulation.Reset();
++                else
++                    rebuild(simulationMods.Value, true);
++
++                return;
++            }
++
++            simulationMods.Value = sourceMods.Select(m => m.DeepClone()).ToArray();
++            rebuild(simulationMods.Value, true);
++        }
++
++        /// <summary>
++        /// Builds the simulation again for other mods, keeping the typed values (or starting over from the score).
++        /// </summary>
++        private void rebuild(IReadOnlyList<Mod> mods, bool fromScore)
++        {
++            modSettingRebuild?.Cancel();
++
++            Mod[] newMods = mods.Select(m => m.DeepClone()).ToArray();
++
++            if (!fromScore && simulation != null && sameModsAndSettings(newMods, simulatedMods))
++                return;
++
++            rebuildCancellation?.Cancel();
++            var cancellation = rebuildCancellation = new CancellationTokenSource();
++            var previous = simulation;
++
++            Task.Run(async () =>
++            {
++                StarDifficulty? difficulty = await difficultyCache.GetDifficultyAsync(beatmapInfo, rulesetInfo, newMods, cancellation.Token).ConfigureAwait(false);
++                cancellation.Token.ThrowIfCancellationRequested();
++
++                var newSimulation = createSimulation(newMods, difficulty);
++
++                if (!fromScore && previous != null)
++                    newSimulation.CopyFrom(previous);
++
++                Schedule(() =>
++                {
++                    if (cancellation.IsCancellationRequested)
++                        return;
++
++                    // normally the shown panel just takes the new numbers (they roll to them), without the entrance animation again.
++                    if (panelContainer.Child is SimulationScorePanel shown && shown.TrySetSimulation(newSimulation, difficulty))
++                    {
++                        simulation = newSimulation;
++                        simulatedMods = newMods;
++                        return;
++                    }
++
++                    LoadComponentAsync(createPanel(newSimulation, difficulty), loaded =>
++                    {
++                        if (cancellation.IsCancellationRequested)
++                            return;
++
++                        simulation = newSimulation;
++                        simulatedMods = newMods;
++                        panelContainer.Child = loaded;
++                    }, cancellation.Token);
++                });
++            }, cancellation.Token).ContinueWith(t =>
++            {
++                if (t.Exception != null)
++                    Logger.Error(t.Exception, "PP simulation could not be updated for these mods.");
++            }, TaskContinuationOptions.OnlyOnFaulted);
++        }
++
++        private PerformanceSimulation createSimulation(Mod[] mods, StarDifficulty? difficulty)
++        {
++            ScoreInfo template;
++            Dictionary<HitResult, int> maximum;
++
++            bool fromScore = sourceScore != null;
++            bool scoreMods = sourceScore != null && sameModsAndSettings(mods, sourceMods);
++
++            try
++            {
++                if (sourceScore != null)
++                {
++                    template = sourceScore.DeepClone();
++
++                    if (template.MaximumStatistics.Sum(kvp => kvp.Value) == 0)
++                        scoreManager.PopulateMaximumStatistics(template);
++
++                    if (!scoreMods)
++                    {
++                        // the score's real total doesn't belong to other mods, so the score is estimated like any edited one.
++                        template.Mods = mods;
++                        template.MaximumStatistics = getPerfectStatistics(beatmaps.GetWorkingBeatmap(beatmapInfo), rulesetInfo, mods);
++                        template.TotalScore = 0;
++                        template.LegacyTotalScore = null;
++                    }
++
++                    maximum = new Dictionary<HitResult, int>(template.MaximumStatistics);
++                }
++                else
++                {
++                    maximum = getPerfectStatistics(beatmaps.GetWorkingBeatmap(beatmapInfo), rulesetInfo, mods);
++                    template = createPerfectScore(rulesetInfo, mods, maximum, api.LocalUser.Value);
++                }
++            }
++            catch (Exception e)
++            {
++                Logger.Error(e, "PP simulation could not be opened for this beatmap.");
++                template = new ScoreInfo(beatmapInfo, rulesetInfo) { Mods = mods };
++                maximum = new Dictionary<HitResult, int>();
++            }
++
++            return new PerformanceSimulation(template, maximum, difficulty?.DifficultyAttributes, calibrateScore: fromScore && scoreMods);
++        }
++
++        private static SimulationScorePanel createPanel(PerformanceSimulation simulation, StarDifficulty? difficulty, bool instant = false) => new SimulationScorePanel(simulation, difficulty, instant)
++        {
++            Anchor = Anchor.Centre,
++            Origin = Anchor.Centre,
++        };
++
++        private static bool sameModsAndSettings(IReadOnlyList<Mod> a, IReadOnlyList<Mod> b)
++            => a.Count == b.Count && a.All(m => b.Any(o => o.Equals(m)));
++
++        public override void OnEntering(ScreenTransitionEvent e)
++        {
++            base.OnEntering(e);
++
++            ApplyToBackground(b =>
++            {
++                b.BlurAmount.Value = background_blur;
++                b.FadeColour(OsuColour.Gray(0.5f), 250);
++            });
++
++            onArriving();
++        }
++
++        public override void OnResuming(ScreenTransitionEvent e)
++        {
++            base.OnResuming(e);
++            onArriving();
++        }
++
++        public override void OnSuspending(ScreenTransitionEvent e)
++        {
++            onLeaving();
++            base.OnSuspending(e);
++        }
++
++        public override bool OnExiting(ScreenExitEvent e)
++        {
++            if (base.OnExiting(e))
++                return true;
++
++            onLeaving();
++            this.FadeOut(100);
++            return false;
++        }
++
++        private void onArriving()
++        {
++            modSelectOverlay.Beatmap.BindTo(Beatmap);
++            modSelectOverlay.Ruleset.BindTo(Ruleset);
++            // required due to https://github.com/ppy/osu-framework/issues/3218
++            modSelectOverlay.SelectedMods.Disabled = false;
++            modSelectOverlay.SelectedMods.BindTo(simulationMods);
++        }
++
++        private void onLeaving()
++        {
++            modSelectOverlay.SelectedMods.UnbindFrom(simulationMods);
++            modSelectOverlay.Ruleset.UnbindFrom(Ruleset);
++            modSelectOverlay.Beatmap.UnbindFrom(Beatmap);
++            modSelectOverlay.Hide();
++        }
++
++        protected override void Dispose(bool isDisposing)
++        {
++            rebuildCancellation?.Cancel();
++            modSettingChangeTracker?.Dispose();
++            modSelectOverlayRegistration?.Dispose();
++
++            base.Dispose(isDisposing);
++        }
++
++        /// <summary>
++        /// The judgements of a perfect play, from playing the beatmap through a score processor.
++        /// </summary>
++        private static Dictionary<HitResult, int> getPerfectStatistics(IWorkingBeatmap working, RulesetInfo rulesetInfo, Mod[] mods)
++        {
++            var ruleset = rulesetInfo.CreateInstance();
++            var playable = working.GetPlayableBeatmap(rulesetInfo, mods);
++
++            var processor = ruleset.CreateScoreProcessor();
++            processor.Mods.Value = mods;
++            processor.ApplyBeatmap(playable);
++
++            return processor.MaximumStatistics;
++        }
++
++        private ScoreInfo createPerfectScore(RulesetInfo rulesetInfo, Mod[] mods, Dictionary<HitResult, int> maximum, Online.API.Requests.Responses.APIUser user)
++        {
++            var statistics = new Dictionary<HitResult, int>();
++
++            foreach ((HitResult result, int count) in maximum)
++            {
++                // spinner bonus can't be edited and isn't part of a "perfect" play, so it starts (and stays) at zero.
++                if (result.IsBonus())
++                    continue;
++
++                statistics[result] = count;
++            }
++
++            return new ScoreInfo(beatmapInfo, rulesetInfo)
++            {
++                User = user,
++                Mods = mods,
++                Statistics = statistics,
++                MaximumStatistics = new Dictionary<HitResult, int>(maximum),
++                MaxCombo = maximum.Where(kvp => kvp.Key.AffectsCombo()).Sum(kvp => kvp.Value),
++                Accuracy = 1,
++                Rank = ScoreRank.X,
++                Date = DateTimeOffset.Now,
++            };
++        }
++
++        /// <summary>
++        /// A footer "button" that is only text, for the hint in the footer's right corner.
++        /// </summary>
++        /// <summary>
++        /// Left click turns the misses into 100s, right click into 300s.
++        /// </summary>
++        private partial class FixChokeButton : ShearedButtonWithIcon
++        {
++            public Action<bool>? FixChoke;
++
++            private bool rightClick;
++
++            public FixChokeButton()
++            {
++                Action = () => FixChoke?.Invoke(rightClick);
++            }
++
++            protected override void OnMouseUp(MouseUpEvent e)
++            {
++                base.OnMouseUp(e);
++
++                // the framework only sends clicks for the left button.
++                if (e.Button != MouseButton.Right || !Enabled.Value || !IsHovered)
++                    return;
++
++                rightClick = true;
++                TriggerClickWithSound();
++                rightClick = false;
++            }
++        }
++
++        private partial class HintButton : ShearedButton
++        {
++            public HintButton(LocalisableString text)
++            {
++                Text = text;
++
++                // the footer lifts its right buttons off the bottom edge; the text is centred on the bar instead.
++                ButtonContent.Y = OsuGame.SCREEN_EDGE_MARGIN + DEFAULT_HEIGHT / 2 - ScreenFooter.HEIGHT / 2f;
++                DarkerColour = Colour4.Transparent;
++                LighterColour = Colour4.Transparent;
++                TextColour = Colour4.White;
++            }
++
++            protected override void Update()
++            {
++                base.Update();
++                Width = ButtonContent.DrawWidth;
++            }
++
++            public override bool ReceivePositionalInputAt(Vector2 screenSpacePos) => false;
++
++            protected override bool OnMouseDown(MouseDownEvent e) => false;
++        }
++
++        /// <summary>
++        /// The expanded results panel (same shape, colours and top part), holding <see cref="SimulationPanelMiddleContent"/>.
++        /// </summary>
++        private partial class SimulationScorePanel : CompositeDrawable
++        {
++            private const float expanded_height = 586;
++
++            private static readonly ColourInfo top_layer_colour = ColourInfo.GradientVertical(Color4Extensions.FromHex("#444"), Color4Extensions.FromHex("#333"));
++            private static readonly ColourInfo middle_layer_colour = ColourInfo.GradientVertical(Color4Extensions.FromHex("#555"), Color4Extensions.FromHex("#333"));
++
++            private readonly PerformanceSimulation simulation;
++
++            private SimulationPanelMiddleContent middleContent = null!;
++
++            public bool TrySetSimulation(PerformanceSimulation newSimulation, StarDifficulty? difficulty)
++                => middleContent.IsLoaded && middleContent.TrySetSimulation(newSimulation, difficulty);
++            private readonly StarDifficulty? difficulty;
++            private readonly bool instant;
++
++            public SimulationScorePanel(PerformanceSimulation simulation, StarDifficulty? difficulty, bool instant)
++            {
++                this.simulation = simulation;
++                this.difficulty = difficulty;
++                this.instant = instant;
++
++                Size = new Vector2(ScorePanel.EXPANDED_WIDTH, expanded_height);
++            }
++
++            [BackgroundDependencyLoader]
++            private void load()
++            {
++                InternalChildren = new Drawable[]
++                {
++                    new Container
++                    {
++                        Name = "Top layer",
++                        RelativeSizeAxes = Axes.X,
++                        Height = 120,
++                        Y = -ScorePanel.EXPANDED_TOP_LAYER_HEIGHT / 2,
++                        Children = new Drawable[]
++                        {
++                            new Container
++                            {
++                                RelativeSizeAxes = Axes.Both,
++                                CornerRadius = 20,
++                                CornerExponent = 2.5f,
++                                Masking = true,
++                                Child = new Box
++                                {
++                                    RelativeSizeAxes = Axes.Both,
++                                    Colour = top_layer_colour,
++                                }
++                            },
++                            new Container
++                            {
++                                RelativeSizeAxes = Axes.Both,
++                                Child = new ExpandedPanelTopContent(simulation.Score.User),
++                            }
++                        }
++                    },
++                    new Container
++                    {
++                        Name = "Middle layer",
++                        RelativeSizeAxes = Axes.Both,
++                        Y = ScorePanel.EXPANDED_TOP_LAYER_HEIGHT / 2,
++                        Children = new Drawable[]
++                        {
++                            new Container
++                            {
++                                RelativeSizeAxes = Axes.Both,
++                                CornerRadius = 20,
++                                CornerExponent = 2.5f,
++                                Masking = true,
++                                Children = new Drawable[]
++                                {
++                                    new Box
++                                    {
++                                        RelativeSizeAxes = Axes.Both,
++                                        Colour = middle_layer_colour,
++                                    },
++                                    new CoverBackground
++                                    {
++                                        RelativeSizeAxes = Axes.Both,
++                                        Model = simulation.Score.User,
++                                        Colour = ColourInfo.GradientVertical(Color4.White.Opacity(0.5f), Color4Extensions.FromHex("#444").Opacity(0))
++                                    }
++                                }
++                            },
++                            middleContent = new SimulationPanelMiddleContent(simulation, difficulty) { Instant = instant },
++                        }
++                    },
++                };
++            }
++        }
++    }
++}
+diff --git a/osu.Game/Screens/Ranking/Simulation/SimulatePerformanceButton.cs b/osu.Game/Screens/Ranking/Simulation/SimulatePerformanceButton.cs
+new file mode 100644
+index 0000000000..ddf8e520a7
+--- /dev/null
++++ b/osu.Game/Screens/Ranking/Simulation/SimulatePerformanceButton.cs
+@@ -0,0 +1,24 @@
++// Added by Patchsu
++
++using System;
++using osu.Framework.Graphics.Sprites;
++using osu.Game.Graphics.UserInterface;
++using osuTK;
++
++namespace osu.Game.Screens.Ranking.Simulation
++{
++    /// <summary>
++    /// Patchsu: the results screen's bottom row button that opens the PP simulation for the shown score.
++    /// Same shape as the collection / favourite buttons next to it.
++    /// </summary>
++    public partial class SimulatePerformanceButton : GrayButton
++    {
++        public SimulatePerformanceButton(Action action)
++            : base(FontAwesome.Solid.Calculator)
++        {
++            Size = new Vector2(75, 30);
++            TooltipText = "simulate PP";
++            Action = action;
++        }
++    }
++}
+diff --git a/osu.Game/Screens/Ranking/Simulation/SimulationPanelMiddleContent.cs b/osu.Game/Screens/Ranking/Simulation/SimulationPanelMiddleContent.cs
+new file mode 100644
+index 0000000000..03ae56ad1e
+--- /dev/null
++++ b/osu.Game/Screens/Ranking/Simulation/SimulationPanelMiddleContent.cs
+@@ -0,0 +1,527 @@
++// Added by Patchsu
++
++using System;
++using System.Collections.Generic;
++using System.Globalization;
++using System.Linq;
++using osu.Framework.Allocation;
++using osu.Framework.Bindables;
++using osu.Framework.Extensions;
++using osu.Framework.Extensions.Color4Extensions;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Colour;
++using osu.Framework.Graphics.Containers;
++using osu.Framework.Graphics.UserInterface;
++using osu.Framework.Input.Events;
++using osu.Framework.Threading;
++using osu.Game.Beatmaps;
++using osu.Game.Beatmaps.Drawables;
++using osu.Game.Configuration;
++using osu.Game.Graphics;
++using osu.Game.Graphics.Containers;
++using osu.Game.Graphics.Sprites;
++using osu.Game.Graphics.UserInterface;
++using osu.Game.Localisation;
++using osu.Game.Resources.Localisation.Web;
++using osu.Game.Rulesets.Mods;
++using osu.Game.Rulesets.Scoring;
++using osu.Game.Scoring;
++using osu.Game.Scoring.Legacy;
++using osu.Game.Screens.Play.HUD;
++using osu.Game.Screens.Ranking.Expanded;
++using osu.Game.Screens.Ranking.Expanded.Accuracy;
++using osu.Game.Screens.Ranking.Expanded.Statistics;
++using osuTK;
++using osuTK.Input;
++
++namespace osu.Game.Screens.Ranking.Simulation
++{
++    /// <summary>
++    /// Patchsu: the middle of the PP simulation panel. Laid out like <see cref="ExpandedPanelMiddleContent"/>,
++    /// but accuracy, combo, PP, judgements, slider ticks and slider ends can be typed into.
++    /// </summary>
++    public partial class SimulationPanelMiddleContent : CompositeDrawable
++    {
++        private const float padding = 10;
++
++        private PerformanceSimulation simulation;
++        private readonly StarDifficulty? starDifficulty;
++
++        private readonly List<EditableStatistic> editableStatistics = new List<EditableStatistic>();
++        private readonly List<StatisticDisplay> statisticDisplays = new List<StatisticDisplay>();
++
++        private EditableStatistic performance = null!;
++        private StarRatingDisplay starRatingDisplay = null!;
++        private ModDisplay modDisplay = null!;
++
++        private bool scoreAppeared;
++        private bool perfectShown;
++        private bool perfectVisible;
++
++        private Container accuracyCircleContainer = null!;
++        private RollingCounter<long> scoreCounter = null!;
++        private Drawable perfectText = null!;
++
++        private readonly Bindable<ScoringMode> scoringMode = new Bindable<ScoringMode>();
++
++        private ScheduledDelegate? accuracyCircleUpdate;
++        private (double accuracy, ScoreRank rank)? shownAccuracyCircle;
++
++        /// <summary>
++        /// Show everything at once, without the results screen's entrance (when the panel takes over one already on screen).
++        /// </summary>
++        public bool Instant { get; init; }
++
++        public SimulationPanelMiddleContent(PerformanceSimulation simulation, StarDifficulty? starDifficulty)
++        {
++            this.simulation = simulation;
++            this.starDifficulty = starDifficulty;
++
++            RelativeSizeAxes = Axes.Both;
++            Masking = true;
++
++            Padding = new MarginPadding(padding);
++        }
++
++        [BackgroundDependencyLoader]
++        private void load(OsuConfigManager config, OsuColour colours)
++        {
++            var score = simulation.Score;
++            var beatmap = score.BeatmapInfo!;
++            var metadata = beatmap.BeatmapSet?.Metadata ?? beatmap.Metadata;
++            string creator = metadata.Author.Username;
++
++            config.BindWith(OsuSetting.ScoreDisplayMode, scoringMode);
++
++            var accuracy = new EditableStatistic(BeatmapsetsStrings.ShowScoreboardHeadersAccuracy)
++            {
++                IsAccuracy = true,
++                Value = () => simulation.Accuracy,
++                // the results screen cuts the accuracy off at two decimals (never rounds it up), so the box starts from the same number.
++                EditText = () => (Math.Floor(simulation.Accuracy * 10000 + 1e-9) / 100).ToString("0.00", CultureInfo.InvariantCulture),
++                Typed = text =>
++                {
++                    if (tryParse(text, out double value))
++                        simulation.SetAccuracy(value / 100);
++                },
++            };
++
++            var combo = new EditableStatistic(BeatmapsetsStrings.ShowScoreboardHeadersCombo)
++            {
++                Value = () => simulation.Combo,
++                EditText = () => simulation.Combo.ToString(CultureInfo.InvariantCulture),
++                SuffixText = () => $"/{simulation.MaximumCombo}",
++                Extra = perfectText = new OsuSpriteText
++                {
++                    Text = "PERFECT",
++                    Font = OsuFont.Torus.With(size: 11, weight: FontWeight.SemiBold),
++                    Colour = ColourInfo.GradientVertical(Color4Extensions.FromHex("#66FFCC"), Color4Extensions.FromHex("#FF9AD7")),
++                    Alpha = 0,
++                    UseFullGlyphHeight = false,
++                },
++            };
++
++            combo.Typed = text =>
++            {
++                if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int value))
++                    return;
++
++                int applied = simulation.SetCombo(value);
++
++                // show the limit right away instead of a combo that can't happen.
++                if (applied != value)
++                    combo.SetText(applied.ToString(CultureInfo.InvariantCulture));
++            };
++
++            performance = new EditableStatistic(BeatmapsetsStrings.ShowScoreboardHeaderspp)
++            {
++                AllowDecimal = true,
++                Value = () => simulation.Performance ?? 0,
++                EditText = () => Math.Round(simulation.Performance ?? 0, MidpointRounding.AwayFromZero).ToString(CultureInfo.InvariantCulture),
++                Typed = text =>
++                {
++                    if (tryParse(text, out double value))
++                        simulation.SetPerformance(value);
++                },
++            };
++
++            applyPerformanceDimming(performance, score);
++
++            var topStatistics = new List<StatisticDisplay> { accuracy, combo, performance };
++
++            editableStatistics.AddRange(new[] { accuracy, combo, performance });
++
++            var bottomStatistics = new List<StatisticDisplay>();
++
++            foreach (var result in score.Ruleset.CreateInstance().GetHitResultsForDisplay())
++            {
++                HitResult type = result.result;
++
++                if (simulation.BasicResults.Contains(type))
++                    bottomStatistics.Add(createCountStatistic(type, result.displayName, colours, false));
++                else if (simulation.TickResults.Contains(type))
++                    bottomStatistics.Add(createCountStatistic(type, result.displayName, colours, true));
++                else if (type.IsBonus() && simulation.GetMaximum(type) > 0)
++                {
++                    // spinner values are only shown, not edited.
++                    bottomStatistics.Add(new HitResultStatistic(new HitResultDisplayStatistic(type, simulation.Get(type), simulation.GetMaximum(type), result.displayName)));
++                }
++            }
++
++            AddInternal(new FillFlowContainer
++            {
++                RelativeSizeAxes = Axes.Both,
++                Direction = FillDirection.Vertical,
++                Spacing = new Vector2(20),
++                Children = new Drawable[]
++                {
++                    new FillFlowContainer
++                    {
++                        Anchor = Anchor.TopCentre,
++                        Origin = Anchor.TopCentre,
++                        RelativeSizeAxes = Axes.X,
++                        AutoSizeAxes = Axes.Y,
++                        Direction = FillDirection.Vertical,
++                        Children = new Drawable[]
++                        {
++                            new ExpandedPanelMiddleContent.ClickableMetadata(beatmap.OnlineID, metadata),
++                            accuracyCircleContainer = new Container
++                            {
++                                Anchor = Anchor.TopCentre,
++                                Origin = Anchor.TopCentre,
++                                Margin = new MarginPadding { Top = 40 },
++                                RelativeSizeAxes = Axes.X,
++                                Height = 230,
++                            },
++                            scoreCounter = new TotalScoreCounter
++                            {
++                                Margin = new MarginPadding { Top = 0, Bottom = 5 },
++                                Current = { Value = 0 },
++                                Alpha = 0,
++                                AlwaysPresent = true
++                            },
++                            new FillFlowContainer
++                            {
++                                Anchor = Anchor.TopCentre,
++                                Origin = Anchor.TopCentre,
++                                AutoSizeAxes = Axes.Both,
++                                Spacing = new Vector2(5, 0),
++                                Children = new Drawable[]
++                                {
++                                    starRatingDisplay = new StarRatingDisplay(starDifficulty ?? new StarDifficulty(beatmap.StarRating, 0))
++                                    {
++                                        Anchor = Anchor.CentreLeft,
++                                        Origin = Anchor.CentreLeft
++                                    },
++                                    new DifficultyIcon(beatmap, score.Ruleset)
++                                    {
++                                        Anchor = Anchor.CentreLeft,
++                                        Origin = Anchor.CentreLeft,
++                                        Size = new Vector2(20),
++                                        TooltipType = DifficultyIconTooltipType.Extended,
++                                    },
++                                    modDisplay = new ModDisplay
++                                    {
++                                        Anchor = Anchor.CentreLeft,
++                                        Origin = Anchor.CentreLeft,
++                                        ExpansionMode = ExpansionMode.AlwaysExpanded,
++                                        Scale = new Vector2(0.5f),
++                                        Current = { Value = score.Mods }
++                                    }
++                                }
++                            },
++                            new FillFlowContainer
++                            {
++                                Anchor = Anchor.TopCentre,
++                                Origin = Anchor.TopCentre,
++                                Direction = FillDirection.Vertical,
++                                AutoSizeAxes = Axes.Both,
++                                Children = new Drawable[]
++                                {
++                                    new TruncatingSpriteText
++                                    {
++                                        Anchor = Anchor.TopCentre,
++                                        Origin = Anchor.TopCentre,
++                                        Text = beatmap.DifficultyName,
++                                        Font = OsuFont.Torus.With(size: 16, weight: FontWeight.SemiBold),
++                                        MaxWidth = ScorePanel.EXPANDED_WIDTH - padding * 2,
++                                    },
++                                    new OsuTextFlowContainer(s => s.Font = OsuFont.Torus.With(size: 12))
++                                    {
++                                        Anchor = Anchor.TopCentre,
++                                        Origin = Anchor.TopCentre,
++                                        AutoSizeAxes = Axes.Both,
++                                        Direction = FillDirection.Horizontal,
++                                    }.With(t =>
++                                    {
++                                        if (!string.IsNullOrEmpty(creator))
++                                        {
++                                            t.AddText("mapped by ");
++                                            t.AddText(creator, s => s.Font = s.Font.With(weight: FontWeight.SemiBold));
++                                        }
++                                    })
++                                }
++                            },
++                        }
++                    },
++                    new FillFlowContainer
++                    {
++                        RelativeSizeAxes = Axes.X,
++                        AutoSizeAxes = Axes.Y,
++                        Direction = FillDirection.Vertical,
++                        Spacing = new Vector2(0, 5),
++                        Children = new Drawable[]
++                        {
++                            createRow(topStatistics),
++                            createRow(bottomStatistics.Where(s => resultOf(s) <= HitResult.Perfect)),
++                            createRow(bottomStatistics.Where(s => resultOf(s) > HitResult.Perfect)),
++                        }
++                    }
++                }
++            });
++
++            statisticDisplays.AddRange(topStatistics);
++            statisticDisplays.AddRange(bottomStatistics);
++
++            // Tab / Shift+Tab walk through the boxes in reading order.
++            foreach (var stat in editableStatistics)
++            {
++                stat.Box.TabPressed = (box, direction) =>
++                {
++                    int index = editableStatistics.FindIndex(s => s.Box == box);
++                    var next = editableStatistics[(index + direction + editableStatistics.Count) % editableStatistics.Count];
++                    GetContainingFocusManager()?.ChangeFocus(next.Box);
++                };
++            }
++
++            if (!simulation.CanCalculatePerformance)
++                performance.Box.Current.Disabled = true;
++        }
++
++        protected override void LoadComplete()
++        {
++            base.LoadComplete();
++
++            simulation.Changed += onChanged;
++            scoringMode.BindValueChanged(_ => updateScore());
++
++            updateAccuracyCircle(!Instant);
++
++            if (Instant)
++            {
++                // already on screen as the results panel: everything shows its final value right away.
++                ScheduleAfterChildren(() =>
++                {
++                    scoreCounter.FadeIn();
++
++                    foreach (var stat in statisticDisplays)
++                        stat.Appear();
++
++                    scoreAppeared = true;
++                    perfectShown = true;
++                    updateScore();
++
++                    FinishTransforms(true);
++                });
++
++                return;
++            }
++
++            // the same entrance as the results screen: the score, then each statistic 200 ms after the previous one.
++            ScheduleAfterChildren(() =>
++            {
++                using (BeginDelayedSequence(AccuracyCircle.ACCURACY_TRANSFORM_DELAY))
++                {
++                    scoreCounter.FadeIn();
++
++                    double delay = 0;
++
++                    foreach (var stat in statisticDisplays)
++                    {
++                        using (BeginDelayedSequence(delay))
++                            stat.Appear();
++
++                        delay += 200;
++                    }
++                }
++
++                Scheduler.AddDelayed(() =>
++                {
++                    scoreAppeared = true;
++                    updateScore();
++                }, AccuracyCircle.ACCURACY_TRANSFORM_DELAY);
++
++                // ComboStatistic's "PERFECT" comes in halfway through its roll.
++                Scheduler.AddDelayed(() => perfectShown = true, AccuracyCircle.ACCURACY_TRANSFORM_DELAY + 200 + AccuracyCircle.ACCURACY_TRANSFORM_DURATION / 2);
++            });
++        }
++
++        protected override bool OnKeyDown(KeyDownEvent e)
++        {
++            // Tab with nothing being edited starts at the accuracy (Shift+Tab at the last number).
++            if (e.Key == Key.Tab && !e.ControlPressed && !e.AltPressed && editableStatistics.Count > 0
++                && GetContainingInputManager()?.FocusedDrawable is not TextBox)
++            {
++                var target = e.ShiftPressed ? editableStatistics[^1] : editableStatistics[0];
++                GetContainingFocusManager()?.ChangeFocus(target.Box);
++                return true;
++            }
++
++            return base.OnKeyDown(e);
++        }
++
++        /// <summary>
++        /// Shows another simulation of the same beatmap (other mods) in place: the numbers roll to the new values
++        /// instead of the whole panel being built and animated again.
++        /// </summary>
++        /// <returns>Whether it could; not if the new mods show different judgement rows.</returns>
++        public bool TrySetSimulation(PerformanceSimulation newSimulation, StarDifficulty? difficulty)
++        {
++            if (!newSimulation.BasicResults.SequenceEqual(simulation.BasicResults) || !newSimulation.TickResults.SequenceEqual(simulation.TickResults))
++                return false;
++
++            simulation.Changed -= onChanged;
++            simulation = newSimulation;
++            simulation.Changed += onChanged;
++
++            var beatmap = simulation.Score.BeatmapInfo!;
++            starRatingDisplay.Current.Value = difficulty ?? new StarDifficulty(beatmap.StarRating, 0);
++            modDisplay.Current.Value = simulation.Score.Mods;
++
++            performance.Alpha = 1;
++            performance.TooltipText = default;
++            applyPerformanceDimming(performance, simulation.Score);
++            performance.Box.Current.Disabled = !simulation.CanCalculatePerformance;
++
++            onChanged();
++            return true;
++        }
++
++        private void applyPerformanceDimming(EditableStatistic performance, ScoreInfo score)
++        {
++            // as PerformanceStatistic does for scores that don't give PP.
++            if (score.BeatmapInfo?.Status.GrantsPerformancePoints() == false)
++            {
++                performance.Alpha = 0.5f;
++                performance.TooltipText = ResultsScreenStrings.NoPPForUnrankedBeatmaps;
++            }
++            else if (score.Mods.Where(m => !score.IsLegacyScore || m is not ModClassic).Any(m => !m.Ranked))
++            {
++                performance.Alpha = 0.5f;
++                performance.TooltipText = ResultsScreenStrings.NoPPForUnrankedMods;
++            }
++        }
++
++        private void onChanged()
++        {
++            foreach (var stat in editableStatistics)
++                stat.Refresh();
++
++            updateScore();
++
++            // rebuilding the circle on every keystroke is wasteful, it only needs to catch up once typing pauses.
++            accuracyCircleUpdate?.Cancel();
++            accuracyCircleUpdate = Scheduler.AddDelayed(() => updateAccuracyCircle(false), 100);
++        }
++
++        protected override void Update()
++        {
++            base.Update();
++
++            bool perfect = perfectShown && simulation.Combo >= simulation.MaximumCombo;
++
++            if (perfect == perfectVisible)
++                return;
++
++            perfectVisible = perfect;
++            perfectText.FadeTo(perfect ? 1 : 0, 50);
++        }
++
++        private void updateScore()
++        {
++            if (scoreAppeared)
++                scoreCounter.Current.Value = simulation.Score.GetDisplayScore(scoringMode.Value);
++        }
++
++        private void updateAccuracyCircle(bool animate)
++        {
++            var state = (simulation.Accuracy, simulation.Score.Rank);
++
++            if (shownAccuracyCircle == state)
++                return;
++
++            shownAccuracyCircle = state;
++
++            // AccuracyCircle reads the score when it loads, so it gets its own copy of the values.
++            var snapshot = new ScoreInfo(simulation.Score.BeatmapInfo, simulation.Score.Ruleset)
++            {
++                Mods = simulation.Score.Mods,
++                Accuracy = simulation.Accuracy,
++                Rank = simulation.Score.Rank,
++            };
++
++            var circle = new AccuracyCircle(snapshot)
++            {
++                Anchor = Anchor.Centre,
++                Origin = Anchor.Centre,
++                RelativeSizeAxes = Axes.Both,
++                FillMode = FillMode.Fit,
++            };
++
++            if (!animate)
++                circle.OnLoadComplete += d => d.FinishTransforms(true);
++
++            accuracyCircleContainer.Child = circle;
++        }
++
++        private EditableStatistic createCountStatistic(HitResult type, Framework.Localisation.LocalisableString name, OsuColour colours, bool showMaximum)
++        {
++            var stat = new EditableStatistic(name)
++            {
++                Value = () => simulation.Get(type),
++                EditText = () => simulation.Get(type).ToString(CultureInfo.InvariantCulture),
++                SuffixText = showMaximum ? () => $"/{simulation.GetMaximum(type)}" : null,
++                HeaderColour = colours.ForHitResult(type),
++            };
++
++            stat.Typed = text =>
++            {
++                if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int value))
++                    return;
++
++                int applied = simulation.SetCount(type, value);
++
++                if (applied != value)
++                    stat.SetText(applied.ToString(CultureInfo.InvariantCulture));
++            };
++
++            editableStatistics.Add(stat);
++            resultTypes[stat] = type;
++            return stat;
++        }
++
++        private readonly Dictionary<StatisticDisplay, HitResult> resultTypes = new Dictionary<StatisticDisplay, HitResult>();
++
++        private HitResult resultOf(StatisticDisplay statistic) => statistic is HitResultStatistic h ? h.Result : resultTypes.GetValueOrDefault(statistic);
++
++        private static GridContainer createRow(IEnumerable<StatisticDisplay> statistics) => new GridContainer
++        {
++            RelativeSizeAxes = Axes.X,
++            AutoSizeAxes = Axes.Y,
++            Content = new[] { statistics.Cast<Drawable>().ToArray() },
++            RowDimensions = new[]
++            {
++                new Dimension(GridSizeMode.AutoSize),
++            }
++        };
++
++        private static bool tryParse(string text, out double value)
++            => double.TryParse(text.Replace(',', '.'), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out value);
++
++        protected override void Dispose(bool isDisposing)
++        {
++            simulation.Changed -= onChanged;
++            base.Dispose(isDisposing);
++        }
++    }
++}
+diff --git a/osu.Game/Screens/Select/BeatmapLeaderboardScore.cs b/osu.Game/Screens/Select/BeatmapLeaderboardScore.cs
+index ff34c9ef38..268adcb177 100644
+--- a/osu.Game/Screens/Select/BeatmapLeaderboardScore.cs
++++ b/osu.Game/Screens/Select/BeatmapLeaderboardScore.cs
+@@ -16,6 +16,7 @@
+ using osu.Framework.Graphics.UserInterface;
+ using osu.Framework.Input.Events;
+ using osu.Framework.Localisation;
++using osu.Framework.Screens;
+ using osu.Game.Configuration;
+ using osu.Game.Extensions;
+ using osu.Game.Graphics;
+@@ -626,6 +627,16 @@ MenuItem[] IHasContextMenu.ContextMenuItems
+                 if (Score.OnlineID > 0)
+                     items.Add(new OsuMenuItem(CommonStrings.CopyLink, MenuItemType.Standard, () => game?.CopyToClipboard($@"{api.Endpoints.WebsiteUrl}/scores/{Score.OnlineID}")));
+ 
++                // Patchsu: PP simulation starting from this score.
++                if (Score.BeatmapInfo != null && Ranking.Simulation.PerformanceSimulationScreen.IsSupported(Score.Ruleset) && this.FindClosestParent<SongSelect>() is SongSelect songSelectScreen)
++                {
++                    items.Add(new OsuMenuItem("Simulate PP", MenuItemType.Standard, () =>
++                    {
++                        if (songSelectScreen.IsCurrentScreen())
++                            songSelectScreen.Push(new Ranking.Simulation.PerformanceSimulationScreen(Score.BeatmapInfo, Score));
++                    }));
++                }
++
+                 if (Score.Files.Count <= 0) return items.ToArray();
+ 
+                 if (items.Count > 0)
+diff --git a/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs b/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs
+index 8ed7ab585e..0c3ad9a9a3 100644
+--- a/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs
++++ b/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs
+@@ -11,6 +11,7 @@
+ using osu.Framework.Graphics.Sprites;
+ using osu.Framework.Input.Events;
+ using osu.Framework.Localisation;
++using osu.Framework.Screens;
+ using osu.Game.Beatmaps;
+ using osu.Game.Graphics;
+ using osu.Game.Graphics.Containers;
+@@ -86,6 +87,16 @@ private void load(OsuColour colours)
+ 
+                     addButton(item.Text.Value, item.Icon, item.Action.Value, item.Type == MenuItemType.Destructive ? colours.Red1 : null);
+                 }
++
++                // Patchsu: PP simulation for the selected difficulty with the selected mods.
++                if (SongSelect is OsuScreen songSelectScreen && Ranking.Simulation.PerformanceSimulationScreen.IsSupported(songSelectScreen.Ruleset.Value))
++                {
++                    addButton("Simulate PP", FontAwesome.Solid.Calculator, () =>
++                    {
++                        if (songSelectScreen.IsCurrentScreen())
++                            songSelectScreen.Push(new Ranking.Simulation.PerformanceSimulationScreen(beatmap));
++                    });
++                }
+             }
+ 
+             protected override void LoadComplete()

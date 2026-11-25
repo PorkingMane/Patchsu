@@ -1,0 +1,120 @@
+{
+  "minCli": "0.1.0",
+  "osuCommit": "8cb6e6e68db6ad3387004c004ed2eb5f9728be37",
+  "osuRepo": "https://github.com/ppy/osu",
+  "dotnetSdk": "10.0",
+  "patches": [
+    {
+      "id": "0001",
+      "file": "0001-patchsu-online-restrictions.patch",
+      "name": "Online restrictions",
+      "required": true,
+      "needs": [],
+      "description": "Turns off score submission, multiplayer and almost every other online feature, so nothing reaches your real osu! profile. Beatmap downloads, metadata updates, leaderboards, profile lookups and replay downloads still work. Every other patch builds on this one."
+    },
+    {
+      "id": "0002",
+      "file": "0002-patchsu-local-profiles.patch",
+      "name": "Local profiles",
+      "note": "big, slower build",
+      "needs": ["0001"],
+      "description": "A fully local, overengineered profile page with an estimated global rank. Supports replay import to database, fetching your top 200 plays from osu! (with beatmap downloads) and batch score export for plays set locally. I really recommend to try it!"
+    },
+    {
+      "id": "0003",
+      "file": "0003-mods-from-Ritsu.patch",
+      "name": "Mods from Ritsu",
+      "needs": ["0001"],
+      "description": "Mods from Ritsu by Azury. Check GitHub page for showcase and more information. With 0007, One Eye, Decoy Circles and Metronome can be switched off in replays."
+    },
+    {
+      "id": "0004",
+      "file": "0004-mods-from-Torii.patch",
+      "name": "Mods from Torii",
+      "needs": ["0001"],
+      "description": "Mods from Torii by ShikkesoraSIM. Hit Sounder and Pitch Adjust. With 0007, both can be switched off in replays."
+    },
+    {
+      "id": "0005",
+      "file": "0005-interface-adjustments.patch",
+      "name": "Interface adjustments",
+      "needs": ["0001"],
+      "description": "Various small UI tweaks, like PP leaderboard sort, random and reverse sorting, shift+arrow caret in search, and more. Check GitHub for every change"
+    },
+    {
+      "id": "0005b",
+      "file": "0005b-scorewithmod-search.patch",
+      "name": "Search by play mods",
+      "needs": ["0001"],
+      "description": "Search keyword scorewithmod= that shows only beatmaps you have a local play on with the given mods: scorewithmod=HD, scorewithmod='Wind Up' (exact name), scorewithmod=HD,DT (one play with both), scorewithmod!=DT, scorewithmod=NM. scoreswithmod= and playwithmod= work too. Uses the scores osu! already keeps, nothing new is stored."
+    },
+    {
+      "id": "0006",
+      "file": "0006-pause-pp-penalty.patch",
+      "name": "Pause PP penalty",
+      "needs": ["0002"],
+      "description": "Optional PP reduction for pausing (7% per pause, from Torii by ShikkesoraSIM), on every map. Settings → Patchsu. Adds a pause counter skin component."
+    },
+    {
+      "id": "0007",
+      "file": "0007-replay-mod-toggles.patch",
+      "name": "Replay mod toggles",
+      "needs": ["0001"],
+      "description": "Turn visual and pitch mods on and off while watching a replay. Includes the Ritsu (0003) and Torii (0004) mods when those are applied."
+    },
+    {
+      "id": "0008",
+      "file": "0008-pp-simulation.patch",
+      "name": "PP simulation",
+      "needs": ["0001"],
+      "description": "A results-style panel where you can simulate scores directly in-game (osu! ruleset). Opened from song select options, a leaderboard score's right-click menu, or the results screen."
+    },
+    {
+      "id": "0009",
+      "file": "0009-mcosu-mods.patch",
+      "name": "McOsu mods",
+      "needs": ["0001"],
+      "description": "Mods from McOsu: Mafham (approach rate set to negative infinity, the whole map on screen at once) and Click Control (Jigsaw 1: every unnecessary click is a miss). osu! ruleset only."
+    },
+    {
+      "id": "0010",
+      "file": "0010-perfect-play-pp-sorting.patch",
+      "name": "Perfect-play PP sorting",
+      "needs": ["0001"],
+      "description": "Ritsu feature ported to clean lazer: song select sorts by PP for a perfect play and by \"farmability\", plus a PP for SS grouping. Right-click on \"Show converts\"."
+    },
+    {
+      "id": "0011",
+      "file": "0011-mod-compatibility.patch",
+      "name": "Mod compatibility",
+      "needs": ["0001"],
+      "description": "Settings → Patchsu → Patch 11. Hard Rock + Mirror for now."
+    },
+    {
+      "id": "0012",
+      "file": "0012-no-fail-pp.patch",
+      "name": "No-Fail PP",
+      "needs": ["0002"],
+      "description": "Settings → Patchsu → Patch 12. Also an option to remove No Fail score reduction."
+    },
+    {
+      "id": "0013",
+      "file": "0013-collection-folders.patch",
+      "name": "Collection folders",
+      "needs": ["0001"],
+      "description": "Sub-collections: a collection named \"Parent/Child\" sits inside \"Parent\". Group by Collections shows nested folders that open like beatmap sets; right-click a folder to add, rename, move or delete. Nested submenus in beatmap menus and a tree in Manage collections."
+    }
+  ],
+  "presets": [
+    {
+      "name": "Vanilla+",
+      "description": "Close to vanilla: UI tweaks, play-mod search, replay mod toggles, PP simulation, perfect-play PP sorting, collection folders.",
+      "patches": ["0005", "0005b", "0007", "0008", "0010", "0013"]
+    },
+    {
+      "name": "Local play",
+      "description": "Every patch: Vanilla+ plus local profiles, the Ritsu, Torii and McOsu mods, mod compatibility, PP options and collection folders.",
+      "patches": "*"
+    }
+  ]
+}
