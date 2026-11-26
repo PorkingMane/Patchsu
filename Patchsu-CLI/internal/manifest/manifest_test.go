@@ -26,11 +26,11 @@ func load(t *testing.T) *Manifest {
 func TestEnablePullsInNeeds(t *testing.T) {
 	m := load(t)
 	s := m.NewSelection()
-	added := m.Enable(s, "0012")
+	added := m.Enable(s, "0009")
 	if want := []string{"0002"}; !reflect.DeepEqual(added, want) {
 		t.Fatalf("added %v, want %v", added, want)
 	}
-	if got := m.IDs(s); !reflect.DeepEqual(got, []string{"0001", "0002", "0012"}) {
+	if got := m.IDs(s); !reflect.DeepEqual(got, []string{"0001", "0002", "0009"}) {
 		t.Fatalf("selection %v", got)
 	}
 }
@@ -38,12 +38,12 @@ func TestEnablePullsInNeeds(t *testing.T) {
 func TestDisableRemovesDependents(t *testing.T) {
 	m := load(t)
 	s := m.PresetSelection(m.Preset("Local play"))
-	removed := m.Disable(s, "0007")
+	removed := m.Disable(s, "0005")
 	if len(removed) != 0 {
-		t.Fatalf("removed %v, want nothing (0003 / 0004 don't need 0007)", removed)
+		t.Fatalf("removed %v, want nothing (0500 / 0501 don't need 0005)", removed)
 	}
 	removed = m.Disable(s, "0002")
-	if want := []string{"0006", "0012"}; !reflect.DeepEqual(removed, want) {
+	if want := []string{"0004", "0009"}; !reflect.DeepEqual(removed, want) {
 		t.Fatalf("removed %v, want %v", removed, want)
 	}
 	if m.Disable(s, "0001") != nil || !s["0001"] {
@@ -54,18 +54,18 @@ func TestDisableRemovesDependents(t *testing.T) {
 func TestMissing(t *testing.T) {
 	m := load(t)
 	s := m.NewSelection()
-	if got := m.Missing(s, "0006"); !reflect.DeepEqual(got, []string{"0002"}) {
+	if got := m.Missing(s, "0004"); !reflect.DeepEqual(got, []string{"0002"}) {
 		t.Fatalf("missing %v", got)
 	}
-	if got := m.Missing(s, "0005"); len(got) != 0 {
-		t.Fatalf("0005 should need nothing beyond 0001, got %v", got)
+	if got := m.Missing(s, "0003"); len(got) != 0 {
+		t.Fatalf("0003 should need nothing beyond 0001, got %v", got)
 	}
 }
 
 func TestPresets(t *testing.T) {
 	m := load(t)
 	want := map[string]string{
-		"Vanilla+": "0001 0005 0005b 0007 0008 0010 0013",
+		"Vanilla+": "0001 0003 0003b 0005 0006 0007 0010",
 	}
 	var all []string
 	for _, p := range m.ListPatches() {
@@ -99,7 +99,7 @@ func TestPresets(t *testing.T) {
 
 func TestResolve(t *testing.T) {
 	m := load(t)
-	s, added, err := m.Resolve([]string{"0005", "0012"})
+	s, added, err := m.Resolve([]string{"0003", "0009"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,17 +142,17 @@ const serverManifest = `{"osuCommit":"x",
  "patches":[
   {"id":"0001","file":"1","required":true},
   {"id":"0002","file":"2","needs":["0001"]},
-  {"id":"0005","file":"5","needs":["0001"]},
-  {"id":"0101","file":"g","needs":["0001"]},
-  {"id":"0102","file":"g2","needs":["0101"]},
-  {"id":"0111","file":"t","needs":["0001"]}],
+  {"id":"0003","file":"3","needs":["0001"]},
+  {"id":"1000","file":"g","needs":["0001"]},
+  {"id":"1001","file":"g2","needs":["1000"]},
+  {"id":"1010","file":"t","needs":["0001"]}],
  "presets":[
-  {"name":"Vanilla+","patches":["0005"]},
+  {"name":"Vanilla+","patches":["0003"]},
   {"name":"Local play","patches":"*"},
-  {"name":"Custom server","patches":["0005"],"server":true}],
+  {"name":"Custom server","patches":["0003"],"server":true}],
  "servers":[
-  {"name":"Gatari","patches":["0101","0102"]},
-  {"name":"Torii","patches":["0111"]}]}`
+  {"name":"Gatari","patches":["1000","1001"]},
+  {"name":"Torii","patches":["1010"]}]}`
 
 func TestServers(t *testing.T) {
 	m, err := Parse([]byte(serverManifest))
@@ -164,15 +164,15 @@ func TestServers(t *testing.T) {
 	for _, p := range m.ListPatches() {
 		list = append(list, p.ID)
 	}
-	if got := strings.Join(list, " "); got != "0001 0002 0005" {
+	if got := strings.Join(list, " "); got != "0001 0002 0003" {
 		t.Fatalf("list %s: server patches must be hidden", got)
 	}
-	if got := ids(m.PresetSelection(m.Preset("Local play"))); got != "0001 0002 0005" {
+	if got := ids(m.PresetSelection(m.Preset("Local play"))); got != "0001 0002 0003" {
 		t.Fatalf(`"*" = %s, must not include server patches`, got)
 	}
 	cs := m.Preset("custom server")
 	g := m.PresetSelectionFor(cs, m.Server("gatari"))
-	if got := ids(g); got != "0001 0005 0101 0102" {
+	if got := ids(g); got != "0001 0003 1000 1001" {
 		t.Fatalf("Custom server + Gatari = %s", got)
 	}
 	if m.BuildName(g) != "Patchsu-Gatari" || m.BuildName(m.NewSelection()) != "Patchsu" {
@@ -185,17 +185,17 @@ func TestServers(t *testing.T) {
 		t.Fatal("a server preset without a server must not match")
 	}
 	m.SetServer(g, m.Server("Torii"))
-	if got := ids(g); got != "0001 0005 0111" || m.BuildName(g) != "Patchsu-Torii" {
+	if got := ids(g); got != "0001 0003 1010" || m.BuildName(g) != "Patchsu-Torii" {
 		t.Fatalf("switch to Torii = %s (%s)", got, m.BuildName(g))
 	}
 	m.SetServer(g, nil)
-	if got := ids(g); got != "0001 0005" {
+	if got := ids(g); got != "0001 0003" {
 		t.Fatalf("no server = %s", got)
 	}
-	if _, _, err := m.Resolve([]string{"0101", "0111"}); err == nil {
+	if _, _, err := m.Resolve([]string{"1000", "1010"}); err == nil {
 		t.Fatal("two servers in one build accepted")
 	}
-	if s, _, err := m.Resolve([]string{"0102"}); err != nil || m.BuildName(s) != "Patchsu-Gatari" {
+	if s, _, err := m.Resolve([]string{"1001"}); err != nil || m.BuildName(s) != "Patchsu-Gatari" {
 		t.Fatalf("Resolve(0102) = %v, %v", s, err)
 	}
 }

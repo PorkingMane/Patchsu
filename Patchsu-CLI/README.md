@@ -21,7 +21,7 @@ Run `Patchsu-CLI` (or `Patchsu-CLI.exe`) in a terminal:
 
 | Preset | Patches | Builds |
 |---|---|---|
-| Vanilla+ | 0001, 0005, 0005b, 0007, 0008, 0010, 0013 | Patchsu |
+| Vanilla+ | 0001, 0003, 0003b, 0005, 0006, 0007, 0010 | Patchsu |
 | Local play | every patch | Patchsu |
 
 Presets come with the patches (`patches.meta.json`), so they change with them.
@@ -65,7 +65,7 @@ After a successful build, the final screen offers to delete `patchsu-data`. The 
 ```
 Patchsu-CLI                                   interactive
 Patchsu-CLI build --preset "Vanilla+" --yes
-Patchsu-CLI build --patches 0005,0012 --yes   # 0012 pulls in 0002
+Patchsu-CLI build --patches 0003,0009 --yes   # 0009 pulls in 0002
 Patchsu-CLI list                              # patches, needs, presets
 Patchsu-CLI check                             # exit code 1 if something is missing
 Patchsu-CLI uninstall                         # game + launcher; osu! data is untouched
@@ -99,9 +99,9 @@ Both are generated from the patches folder and its hand-edited `patches.meta.jso
 Patchsu-CLI make-release --local ../Patchsu/patches --tag v26 --out dist/
 ```
 
-The CLI takes the newest release whose tag doesn't start with `cli-` (CLI releases are tagged `cli-v1.0.0`). To try patches without publishing, use `--local DIR`. The CLI then reads `patches.meta.json` directly and computes the hashes itself.
+The CLI takes the newest release whose tag doesn't start with `cli-` (CLI releases are tagged `cli-v1.1.0`). To try patches without publishing, use `--local DIR`. The CLI then reads `patches.meta.json` directly and computes the hashes itself.
 
-A `patches/` folder next to the program (with `manifest.json` or `patches.meta.json`) is used automatically, as if `--local` was given. `./install-dev.sh` builds the CLI into `../Patchsu/Patchsu-CLI`, so in the Patchsu folder `./Patchsu-CLI` builds from your working patches.
+A `patches/` folder next to the program (with `manifest.json` or `patches.meta.json`) is used automatically, as if `--local` was given. `./install-dev.sh` builds the CLI into `Patchsu-CLI/Patchsu-CLI`; that build also finds `../Patchsu/patches` on its own, so `./Patchsu-CLI` in this folder builds from your working patches.
 
 The manifest is validated on load: unknown ids in `needs` or presets, loops, and duplicate ids are errors.
 
@@ -113,7 +113,7 @@ go build -o Patchsu-CLI .
 go test ./...
 # release binaries (run go generate first, or they have no built-in patches)
 for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
-  GOOS=${t%/*} GOARCH=${t#*/} go build -ldflags "-s -w -X main.Version=1.0.0" -o dist/Patchsu-CLI-${t%/*}-${t#*/}$( [ ${t%/*} = windows ] && echo .exe ) .
+  GOOS=${t%/*} GOARCH=${t#*/} go build -ldflags "-s -w -X main.Version=1.1.0" -o dist/Patchsu-CLI-${t%/*}-${t#*/}$( [ ${t%/*} = windows ] && echo .exe ) .
 done
 ```
 

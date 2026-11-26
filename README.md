@@ -44,7 +44,7 @@ Instead, I'd love to actually experiment on my own and .patch stuff on top of ba
 I think its a fair game as long as people don't annoy each other and act reasonable... Also I hate stable (stable is almost the same age as me bruh), McOsu is really old as well, and many clients do not update/keep up with lazer rather going their own path, so idea of .patch files that can be split up and built differently feels a lot better to me than dividing the community into many forks that serve different purposes (I'm aware that this repo will only contribute to this problem with 99% certainty either way, but I'll try to maintain it as long as possible).
 
 ## Patch logic
-Every patch is dependent on 0001-patchsu-online-restrictions because NO WAY we should send any updates to your actual osu!profile, even if there is in-game protection from this, especially with how many patches there are. If you modifying the patches and removing this line, or you asking AI agent to do so - its on you, and I would HIGHLY advise not to.
+Every patch is dependent on 0001-Offline-Fix because NO WAY we should send any updates to your actual osu!profile, even if there is in-game protection from this, especially with how many patches there are. If you modifying the patches and removing this line, or you asking AI agent to do so - its on you, and I would HIGHLY advise not to.
 
 Patches are stackable against each other. Patches with B or even C that becomes available if you apply patches that those depend on, because its a multilayer change in osu! code
 
@@ -52,7 +52,7 @@ Most patches are small and tweak little things, like few UI changes, but, for ex
 
 Patches are updated separately if possible, but to successfully test if it compiles I suggest testing it with minimal and maximum required of patches possible.
 
-Patchsu uses the official osu! data folder (`~/.local/share/osu`, `%APPDATA%\osu`), so your beatmaps, skins and scores are shared with the official client. Local profile data lives in its `osu-local/` subfolder. Only one of the two clients can run at a time.
+Patchsu uses the official osu! data folder (`~/.local/share/osu`, `%APPDATA%\osu`), so your beatmaps, skins and scores are shared with the official client. Patchsu's own data (settings in `PatchsuSettings.json`, local profiles, caches) lives in its `patchsu-osu/` subfolder (called `osu-local/` before; it is renamed on the first start). Only one of the two clients can run at a time.
 
 ### Most notable things implemented
 All things documented here already can be compiled via provided .sh / .cmd files (or CLI tool in release tab) and are heavily tested.
@@ -128,13 +128,13 @@ All things documented here already can be compiled via provided .sh / .cmd files
 
 [PATCHES.md](PATCHES.md) - every patch, what it needs and what it does.
 
-[CONTRIBUTING.md](CONTRIBUTING.md) - self-explanotory. AI written.
+[CONTRIBUTING.md](CONTRIBUTING.md)
 
-[CHANGELOG.md](CHANGELOG.md)
+[CHANGELOG.md](CHANGELOG.md) - AI compiled for now
 
-[AGENTS.md](Patchsu/AGENTS.md) - if you let an AI agent touch the patches, point it here
+[AGENTS.md](Agents/AGENTS.md) - if you let an AI agent update/do anything, point it here
 
 # License
 This patch files use the MIT license, which matches the license of the upstream client (osu!lazer).
-**Exception:** the Modosu-derived mods in `0003-mods-from-Ritsu.patch` are GPL-3.0 (the patch adds `LICENCE-Modosu.txt` to the tree), so a build that includes 0003 is GPL-3.0 as a whole.
+**Exception:** the Modosu-derived mods in `0500-Ritsu-Mods.patch` are GPL-3.0 (the patch adds `LICENCE-Modosu.txt` to the tree), so a build that includes 0500 is GPL-3.0 as a whole.
 See [LICENSE](LICENSE) for more information

@@ -1,5 +1,8 @@
 # Patchsu-CLI: design (draft v3)
 
+> Historical draft: patch numbers here are the ones from before the 2026-11-26 renumbering (0007a/b/c, 0101, …).
+> The mapping to the current numbers is in [Agents/CHANGELOG_AGENTS.md](../Agents/CHANGELOG_AGENTS.md).
+
 > Implemented in this folder (see README.md). Differences from draft v2 are listed at the end, under "Changes while implementing".
 
 A single Go binary, `Patchsu-CLI` (`Patchsu-CLI.exe` on Windows), that lets you pick Patchsu patches (one by one or from a preset), checks your system, fetches what's missing and builds the patched osu!lazer.

@@ -1,4 +1,4 @@
-// Patchsu optimisation pass local test (not part of any patch): 0002 store / exclusions / tags, 0010 perfect-play PP cache and session.
+// Patchsu optimisation pass local test (not part of any patch): 0002 store / exclusions / tags, 0007 perfect-play PP cache and session.
 // Copy into osu.Game.Tests/NonVisual and run `dotnet test --filter PatchsuOptimisationTest`.
 
 using System;
@@ -25,7 +25,7 @@ namespace osu.Game.Tests.NonVisual
         public void TestPerfectPerformanceCacheConvertsOldFile()
         {
             using var storage = new TemporaryNativeStorage(nameof(TestPerfectPerformanceCacheConvertsOldFile));
-            var dir = storage.GetStorageForDirectory("osu-local");
+            var dir = storage.GetStorageForDirectory("patchsu-osu");
 
             string mods = PerfectPerformanceCache.GetModsKey(null);
             var old = new Dictionary<string, double[]>
@@ -133,10 +133,10 @@ namespace osu.Game.Tests.NonVisual
 
             store.Flush();
 
-            string cache = File.ReadAllText(storage.GetFullPath("osu-local/performance-cache.json"));
+            string cache = File.ReadAllText(storage.GetFullPath("patchsu-osu/performance-cache.json"));
             Assert.That(cache, Does.Contain($"\"{id}\": 123.5"), "indented, readable");
 
-            string profiles = File.ReadAllText(storage.GetFullPath("osu-local/profiles.json"));
+            string profiles = File.ReadAllText(storage.GetFullPath("patchsu-osu/profiles.json"));
             Assert.That(profiles, Does.Contain("\"Name\": \"Test\""));
 
             var reloaded = new LocalProfileStore(storage);
@@ -164,7 +164,7 @@ namespace osu.Game.Tests.NonVisual
             Assert.That(tags.Get(beatmap), Is.EqualTo(new[] { "streams" }));
 
             Assert.That(new LocalBeatmapTags(storage).Get(beatmap), Is.EqualTo(new[] { "streams" }));
-            Assert.That(File.ReadAllText(storage.GetFullPath("osu-local/beatmap-tags.json")), Does.Contain("\n"), "indented");
+            Assert.That(File.ReadAllText(storage.GetFullPath("patchsu-osu/beatmap-tags.json")), Does.Contain("\n"), "indented");
         }
     }
 }

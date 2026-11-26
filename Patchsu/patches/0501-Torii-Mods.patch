@@ -1,0 +1,816 @@
+Patchsu patch 501 (optional, pick 0500 and/or 0501): gameplay mods from Torii (apply after 0002).
+
+Ported from Torii (the client base of preritsu, Torii-exclusive mods). Names and acronyms are kept as in Torii;
+none of them collide with stock osu!lazer mods or with 0500 (Ritsu).
+
+  Fun (osu!):                      Hit Sounder (HS)
+  Fun (osu!, taiko, catch, mania): Pitch Adjust (PA)
+
+Mod select shows a "from Torii" plaque on these mods.
+Pitch Adjust uses a music-note mod icon sized like the stock icons (embedded in osu.Game), since Torii's own icon
+texture is not part of osu! resources.
+Torii's automatic Pitch Adjust / pitch-changing DT-HT deselection is not ported.
+
+Replay mod toggles (formerly the separate patch 0007c, old numbering; built only when 0005 is applied too, which defines PATCHSU_REPLAY_MOD_TOGGLES
+in Directory.Build.props). These mods join the "Mod effects" group and the clickable mod icons in a replay:
+  Hit Sounder   key presses stop making sounds and the notes get the map's own hitsounds back
+  Pitch Adjust  the song plays at its normal pitch
+As with 0005, only what you hear changes: replay frames, judgements and score stay the same.
+
+diff --git a/osu.Game.Rulesets.Catch/CatchRuleset.cs b/osu.Game.Rulesets.Catch/CatchRuleset.cs
+index 7ac18f1d4d..186e21616d 100644
+--- a/osu.Game.Rulesets.Catch/CatchRuleset.cs
++++ b/osu.Game.Rulesets.Catch/CatchRuleset.cs
+@@ -174,6 +174,7 @@ public override IEnumerable<Mod> GetModsFor(ModType type)
+                         new CatchModNoScope(),
+                         new CatchModMovingFast(),
+                         new CatchModSynesthesia(),
++                        new ModPitchAdjust(),
+                     };
+ 
+                 case ModType.System:
+diff --git a/osu.Game.Rulesets.Mania/ManiaRuleset.cs b/osu.Game.Rulesets.Mania/ManiaRuleset.cs
+index 79c3150fce..ccdd42b5e1 100644
+--- a/osu.Game.Rulesets.Mania/ManiaRuleset.cs
++++ b/osu.Game.Rulesets.Mania/ManiaRuleset.cs
+@@ -296,7 +296,8 @@ public override IEnumerable<Mod> GetModsFor(ModType type)
+                     {
+                         new MultiMod(new ModWindUp(), new ModWindDown()),
+                         new ManiaModMuted(),
+-                        new ModAdaptiveSpeed()
++                        new ModAdaptiveSpeed(),
++                        new ModPitchAdjust(),
+                     };
+ 
+                 case ModType.System:
+diff --git a/osu.Game.Rulesets.Osu/Mods/OsuModHitSounder.cs b/osu.Game.Rulesets.Osu/Mods/OsuModHitSounder.cs
+new file mode 100644
+index 0000000000..53457dad7f
+--- /dev/null
++++ b/osu.Game.Rulesets.Osu/Mods/OsuModHitSounder.cs
+@@ -0,0 +1,309 @@
++// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
++// See the LICENCE file in the repository root for full licence text.
++
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using osu.Framework.Allocation;
++using osu.Framework.Bindables;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Containers;
++using osu.Framework.Graphics.Sprites;
++using osu.Framework.Input.Bindings;
++using osu.Framework.Input.Events;
++using osu.Framework.Localisation;
++using osu.Game.Audio;
++using osu.Game.Beatmaps;
++using osu.Game.Beatmaps.ControlPoints;
++using osu.Game.Beatmaps.Legacy;
++using osu.Game.Configuration;
++using osu.Game.Graphics;
++using osu.Game.Rulesets.Mods;
++using osu.Game.Rulesets.Objects;
++using osu.Game.Rulesets.Objects.Drawables;
++using osu.Game.Rulesets.Osu.Objects;
++using osu.Game.Rulesets.Osu.UI;
++using osu.Game.Rulesets.UI;
++using osu.Game.Skinning;
++
++namespace osu.Game.Rulesets.Osu.Mods
++{
++    /// <summary>
++    /// torii: hitsounds driven by your KEYS instead of by the notes.
++    /// </summary>
++    /// <remarks>
++    /// <para>
++    /// Normally a hitsound only fires when a note is judged as hit
++    /// (<see cref="DrawableHitObject"/> plays its samples on entering
++    /// <c>ArmedState.Hit</c>). This mod moves the trigger to the input: every
++    /// press makes a sound, hit or not, exactly like a taiko drum.
++    /// </para>
++    /// <para>
++    /// Which sample plays is decided by WHERE you are in the map, never by
++    /// whether you actually hit anything:
++    /// <list type="bullet">
++    /// <item>press lands close to a note in time, you get that note's samples,
++    /// so the mapper's whistles and claps still come through.</item>
++    /// <item>nothing nearby (a break, or mashing between patterns) you get the
++    /// plain hitnormal of the sample set active at that point in the timeline.
++    /// A drum section mashes like a drum, a soft section mashes soft.</item>
++    /// </list>
++    /// That second rule is the taiko part: don and kat are skin sounds that
++    /// follow the section, they are not per-note. Falling back to the nearest
++    /// note's samples instead would fire lone claps in the middle of a break,
++    /// which sounds wrong for exactly that reason.
++    /// </para>
++    /// </remarks>
++    public partial class OsuModHitSounder : Mod, IApplicableToDrawableRuleset<OsuHitObject>, IApplicableToBeatmap, IToriiExclusiveMod
++#if PATCHSU_REPLAY_MOD_TOGGLES
++        , IToggleableInReplay
++#endif
++    {
++        public override string Name => "Hit Sounder";
++        public override string Acronym => "HS";
++        public override LocalisableString Description => "Hitsounds follow your fingers, not the notes. Mash freely.";
++        public override ModType Type => ModType.Fun;
++        public override IconUsage? Icon => OsuIcon.Metronome;
++
++        /// <summary>
++        /// Ranked: this mod only moves sound around. It does not touch hit
++        /// windows, object timing, or anything the difficulty calculator reads,
++        /// so a play with it on is exactly as hard as a play without it.
++        /// <see cref="Mod.Ranked"/> defaults to false, hence the override.
++        /// </summary>
++        public override bool Ranked => true;
++
++        public override Type[] IncompatibleMods => new[] { typeof(ModAutoplay), typeof(OsuModCinema) };
++
++        [SettingSource("Sample set", "Which bank to mash with when there is no note nearby.")]
++        public Bindable<HitSounderBank> Bank { get; } = new Bindable<HitSounderBank>(HitSounderBank.Auto);
++
++        [SettingSource("Keep note hitsounds", "Off makes every press sound the same, ignoring what the mapper hitsounded.")]
++        public BindableBool UseNoteSamples { get; } = new BindableBool(true);
++
++        /// <summary>
++        /// How close a press has to land to a note to borrow its samples. Wider
++        /// than a hit window on purpose: this is about the press feeling like it
++        /// belongs to that note, not about judging it.
++        /// </summary>
++        private const double borrow_window_ms = 200;
++
++        private IBeatmap beatmap = null!;
++
++        /// <summary>Object start times, sorted, so a press can binary-search the closest one.</summary>
++        private double[] objectTimes = Array.Empty<double>();
++        private IList<HitSampleInfo>[] objectSamples = Array.Empty<IList<HitSampleInfo>>();
++
++#if PATCHSU_REPLAY_MOD_TOGGLES
++        /// <summary>The top-level objects whose samples were taken off, in the same order as <see cref="objectSamples"/>.</summary>
++        private HitObject[] objectsWithoutSamples = Array.Empty<HitObject>();
++
++        /// <summary>Patchsu (replay mod toggles, built when 0005 is applied): false while the mod is switched off in a replay.</summary>
++        private bool soundsEnabled = true;
++#endif
++
++        public void ApplyToBeatmap(IBeatmap b)
++        {
++            beatmap = b;
++
++            // Nested objects (slider ticks, tails, spinner bonus) keep firing on
++            // their own, so only top-level starts are candidates for borrowing.
++            var ordered = b.HitObjects.OrderBy(h => h.StartTime).ToArray();
++            objectTimes = ordered.Select(h => h.StartTime).ToArray();
++            objectSamples = ordered.Select(h => h.Samples.ToArray()).Cast<IList<HitSampleInfo>>().ToArray();
++
++            // Take the samples off the objects now that we hold a copy. Without
++            // this a note you actually hit sounds twice, once from your key and
++            // once from the note. Doing it here rather than on the drawable is
++            // both simpler and the only option: DrawableHitObject.Samples is
++            // protected. Nested samples are untouched, so slider ticks and tails
++            // still play as the mapper wrote them.
++            foreach (var hitObject in ordered)
++                hitObject.Samples = Array.Empty<HitSampleInfo>();
++#if PATCHSU_REPLAY_MOD_TOGGLES
++
++            objectsWithoutSamples = ordered;
++#endif
++        }
++#if PATCHSU_REPLAY_MOD_TOGGLES
++
++        /// <summary>
++        /// Patchsu: switched off in a replay, the key presses stop making sounds and the notes get their own
++        /// hitsounds back, so the replay sounds like a play without this mod. Samples don't affect judgements.
++        /// </summary>
++        public void SetReplayEffectsEnabled(bool enabled, ReplayModToggleContext context)
++        {
++            soundsEnabled = enabled;
++
++            for (int i = 0; i < objectsWithoutSamples.Length; i++)
++                objectsWithoutSamples[i].Samples = enabled ? Array.Empty<HitSampleInfo>() : objectSamples[i];
++        }
++#endif
++
++        public void ApplyToDrawableRuleset(DrawableRuleset<OsuHitObject> drawableRuleset)
++        {
++            var osuRuleset = (DrawableOsuRuleset)drawableRuleset;
++            osuRuleset.KeyBindingInputManager.Add(new HitSoundPlayer(this, drawableRuleset.FrameStableClock));
++        }
++
++        /// <summary>
++        /// Sample selection is the whole mod, so it is worth asserting on
++        /// directly rather than through a running playfield.
++        /// </summary>
++        internal ISampleInfo[] SamplesForTesting(double time) => SamplesFor(time) ?? Array.Empty<ISampleInfo>();
++
++        /// <summary>
++        /// Samples for a press at <paramref name="time"/>, or null if nothing should play.
++        /// </summary>
++        private ISampleInfo[]? SamplesFor(double time)
++        {
++            if (UseNoteSamples.Value)
++            {
++                var borrowed = nearestNoteSamples(time);
++                if (borrowed != null)
++                    return borrowed.Cast<ISampleInfo>().ToArray();
++            }
++
++            return new ISampleInfo[] { fallbackSample(time) };
++        }
++
++        private IList<HitSampleInfo>? nearestNoteSamples(double time)
++        {
++            if (objectTimes.Length == 0)
++                return null;
++
++            int i = Array.BinarySearch(objectTimes, time);
++            if (i < 0)
++                i = ~i;
++
++            // ~i is the first object at or after `time`, so the closest is that
++            // one or the one before it.
++            int best = -1;
++            double bestDistance = double.MaxValue;
++
++            foreach (int candidate in new[] { i - 1, i })
++            {
++                if (candidate < 0 || candidate >= objectTimes.Length)
++                    continue;
++
++                double distance = Math.Abs(objectTimes[candidate] - time);
++                if (distance < bestDistance)
++                {
++                    bestDistance = distance;
++                    best = candidate;
++                }
++            }
++
++            if (best < 0 || bestDistance > borrow_window_ms)
++                return null;
++
++            var samples = objectSamples[best];
++            return samples.Count > 0 ? samples : null;
++        }
++
++        /// <summary>
++        /// The plain hitnormal of the bank in force at this point, which is what
++        /// makes mashing track the section instead of being one flat tick.
++        /// </summary>
++        private HitSampleInfo fallbackSample(double time)
++        {
++            string bank = Bank.Value switch
++            {
++                HitSounderBank.Normal => HitSampleInfo.BANK_NORMAL,
++                HitSounderBank.Soft => HitSampleInfo.BANK_SOFT,
++                HitSounderBank.Drum => HitSampleInfo.BANK_DRUM,
++                // SamplePointAt only exists on the legacy control point info, which is
++                // what every .osu-sourced beatmap actually carries. Anything else has no
++                // per-section banks to follow, so the plain default is correct there.
++                _ => ((beatmap.ControlPointInfo as LegacyControlPointInfo)?.SamplePointAt(time)
++                      ?? SampleControlPoint.DEFAULT).SampleBank,
++            };
++
++            return new HitSampleInfo(HitSampleInfo.HIT_NORMAL, bank);
++        }
++
++        /// <summary>
++        /// Lives in the key binding input manager so it sees presses before
++        /// gameplay does, and never blocks them: this mod adds sound, it does not
++        /// change what reaches the playfield.
++        /// </summary>
++        private partial class HitSoundPlayer : CompositeDrawable, IKeyBindingHandler<OsuAction>
++        {
++            private readonly OsuModHitSounder mod;
++            private readonly IFrameStableClock clock;
++
++            /// <summary>
++            /// Pool of one-shot players. A single SkinnableSound cannot overlap
++            /// with itself, and streams absolutely will, so presses round-robin
++            /// through several.
++            /// </summary>
++            private const int voices = 8;
++
++            private readonly PausableSkinnableSound[] pool = new PausableSkinnableSound[voices];
++            private int nextVoice;
++
++            public HitSoundPlayer(OsuModHitSounder mod, IFrameStableClock clock)
++            {
++                this.mod = mod;
++                this.clock = clock;
++            }
++
++            [BackgroundDependencyLoader]
++            private void load()
++            {
++                for (int i = 0; i < voices; i++)
++                    AddInternal(pool[i] = new PausableSkinnableSound());
++            }
++
++            public bool OnPressed(KeyBindingPressEvent<OsuAction> e)
++            {
++                switch (e.Action)
++                {
++                    case OsuAction.LeftButton:
++                    case OsuAction.RightButton:
++                        play();
++                        break;
++                }
++
++                // never swallow the press.
++                return false;
++            }
++
++            public void OnReleased(KeyBindingReleaseEvent<OsuAction> e)
++            {
++            }
++
++            private void play()
++            {
++                // Rewinding replays would otherwise fire a burst of stale presses.
++                if (clock.IsRewinding)
++                    return;
++
++#if PATCHSU_REPLAY_MOD_TOGGLES
++                if (!mod.soundsEnabled)
++                    return;
++#endif
++
++                var samples = mod.SamplesFor(clock.CurrentTime);
++                if (samples == null || samples.Length == 0)
++                    return;
++
++                var voice = pool[nextVoice];
++                nextVoice = (nextVoice + 1) % voices;
++
++                voice.Samples = samples;
++                voice.Play();
++            }
++        }
++    }
++
++    public enum HitSounderBank
++    {
++        [System.ComponentModel.Description("Follow the map")]
++        Auto,
++
++        Normal,
++        Soft,
++        Drum,
++    }
++}
+diff --git a/osu.Game.Rulesets.Osu/OsuRuleset.cs b/osu.Game.Rulesets.Osu/OsuRuleset.cs
+index 79c34abe69..5d8619a055 100644
+--- a/osu.Game.Rulesets.Osu/OsuRuleset.cs
++++ b/osu.Game.Rulesets.Osu/OsuRuleset.cs
+@@ -242,3 +242,5 @@ public override IEnumerable<Mod> GetModsFor(ModType type)
++                        new OsuModHitSounder(),
++                        new ModPitchAdjust(),
+                     };
+ 
+                 case ModType.System:
+diff --git a/osu.Game.Rulesets.Taiko/TaikoRuleset.cs b/osu.Game.Rulesets.Taiko/TaikoRuleset.cs
+index bc9f1c5f25..f9d62c3c5a 100644
+--- a/osu.Game.Rulesets.Taiko/TaikoRuleset.cs
++++ b/osu.Game.Rulesets.Taiko/TaikoRuleset.cs
+@@ -194,7 +194,8 @@ public override IEnumerable<Mod> GetModsFor(ModType type)
+                     {
+                         new MultiMod(new ModWindUp(), new ModWindDown()),
+                         new TaikoModMuted(),
+-                        new ModAdaptiveSpeed()
++                        new ModAdaptiveSpeed(),
++                        new ModPitchAdjust(),
+                     };
+ 
+                 case ModType.System:
+diff --git a/osu.Game/Graphics/OsuIcon.cs b/osu.Game/Graphics/OsuIcon.cs
+index 1135b21114..562d9272cf 100644
+--- a/osu.Game/Graphics/OsuIcon.cs
++++ b/osu.Game/Graphics/OsuIcon.cs
+@@ -186,6 +186,7 @@ public static class OsuIcon
+         public static IconUsage ModNoScope => get(OsuIconMapping.ModNoScope);
+         public static IconUsage ModOneKey => get(OsuIconMapping.ModOneKey);
+         public static IconUsage ModPerfect => get(OsuIconMapping.ModPerfect);
++        public static IconUsage ModPitchAdjust => get(OsuIconMapping.ModPitchAdjust); // Torii mod icon (embedded in osu.Game).
+         public static IconUsage ModRandom => get(OsuIconMapping.ModRandom);
+         public static IconUsage ModRelax => get(OsuIconMapping.ModRelax);
+         public static IconUsage ModRepel => get(OsuIconMapping.ModRepel);
+@@ -682,6 +683,9 @@ private enum OsuIconMapping
+             [Description(@"Mods/mod-perfect")]
+             ModPerfect,
+ 
++            [Description(@"Mods/torii-pitch-adjust")]
++            ModPitchAdjust,
++
+             [Description(@"Mods/mod-random")]
+             ModRandom,
+ 
+diff --git a/osu.Game/OsuGameBase.cs b/osu.Game/OsuGameBase.cs
+index c44efa34e5..6e63386161 100644
+--- a/osu.Game/OsuGameBase.cs
++++ b/osu.Game/OsuGameBase.cs
+@@ -525,6 +525,9 @@ protected virtual void InitialiseFonts()
+             AddFont(Resources, @"Fonts/Venera/Venera-Bold");
+             AddFont(Resources, @"Fonts/Venera/Venera-Black");
+ 
++            // Torii mod icons are embedded in this assembly.
++            Resources.AddStore(new DllResourceStore(typeof(OsuGameBase).Assembly));
++
+             Fonts.AddStore(new OsuIcon.OsuIconStore(Textures));
+         }
+ 
+diff --git a/osu.Game/Overlays/Mods/ModPanel.cs b/osu.Game/Overlays/Mods/ModPanel.cs
+index df72692f48..d3cc9aa2c4 100644
+--- a/osu.Game/Overlays/Mods/ModPanel.cs
++++ b/osu.Game/Overlays/Mods/ModPanel.cs
+@@ -51,6 +51,9 @@ public ModPanel(Mod mod)
+         private void load(OsuColour colours)
+         {
+             AccentColour = colours.ForModType(Mod.Type);
++
++            // Patchsu 0501: "from Torii" plaque.
++            ToriiModPlaque.TryAttach(Mod, MainContentContainer, Active);
+         }
+ 
+         protected override void LoadComplete()
+diff --git a/osu.Game/Overlays/Mods/ToriiModPlaque.cs b/osu.Game/Overlays/Mods/ToriiModPlaque.cs
+new file mode 100644
+index 0000000000..b631a8fe75
+--- /dev/null
++++ b/osu.Game/Overlays/Mods/ToriiModPlaque.cs
+@@ -0,0 +1,75 @@
++// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
++// See the LICENCE file in the repository root for full licence text.
++
++using osu.Framework.Bindables;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Containers;
++using osu.Framework.Graphics.Sprites;
++using osu.Game.Graphics;
++using osu.Game.Graphics.Sprites;
++using osu.Game.Rulesets.Mods;
++using osuTK;
++using osuTK.Graphics;
++
++namespace osu.Game.Overlays.Mods
++{
++    /// <summary>
++    /// The "from Torii" plaque in the top-right corner of a mod panel (Patchsu patch 0501).
++    /// </summary>
++    public static class ToriiModPlaque
++    {
++        // Torii gate vermillion.
++        private static readonly Color4 torii_red = new Color4(255, 80, 60, 255);
++        private static readonly Color4 torii_badge_active = new Color4(70, 20, 35, 255);
++
++        private const double transition_duration = 150;
++
++        public static void TryAttach(Mod mod, Container target, IBindable<bool> active)
++        {
++            if (mod is not IToriiExclusiveMod)
++                return;
++
++            var icon = new SpriteIcon
++            {
++                Icon = FontAwesome.Solid.ToriiGate,
++                Size = new Vector2(12),
++                Anchor = Anchor.CentreLeft,
++                Origin = Anchor.CentreLeft,
++                Colour = torii_red,
++            };
++
++            var text = new OsuSpriteText
++            {
++                Text = "from Torii",
++                Font = OsuFont.Default.With(size: 9, weight: FontWeight.SemiBold),
++                Colour = torii_red,
++                Anchor = Anchor.CentreLeft,
++                Origin = Anchor.CentreLeft,
++            };
++
++            target.Add(new Container
++            {
++                Anchor = Anchor.TopRight,
++                Origin = Anchor.TopRight,
++                AutoSizeAxes = Axes.Both,
++                Margin = new MarginPadding { Right = 6, Top = 5 },
++                Shear = -OsuGame.SHEAR,
++                Child = new FillFlowContainer
++                {
++                    AutoSizeAxes = Axes.Both,
++                    Direction = FillDirection.Horizontal,
++                    Spacing = new Vector2(3, 0),
++                    Children = new Drawable[] { icon, text },
++                },
++            });
++
++            var activeCopy = active.GetBoundCopy();
++            activeCopy.BindValueChanged(a =>
++            {
++                Color4 colour = a.NewValue ? torii_badge_active : torii_red;
++                icon.FadeColour(colour, transition_duration, Easing.OutQuint);
++                text.FadeColour(colour, transition_duration, Easing.OutQuint);
++            }, true);
++        }
++    }
++}
+diff --git a/osu.Game/Rulesets/Mods/IToriiExclusiveMod.cs b/osu.Game/Rulesets/Mods/IToriiExclusiveMod.cs
+new file mode 100644
+index 0000000000..21b8eb050f
+--- /dev/null
++++ b/osu.Game/Rulesets/Mods/IToriiExclusiveMod.cs
+@@ -0,0 +1,13 @@
++// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
++// See the LICENCE file in the repository root for full licence text.
++
++namespace osu.Game.Rulesets.Mods
++{
++    /// <summary>
++    /// marca un mod como exclusivo de torii. la tarjeta del mod-select le pone
++    /// el badge "torii exclusive" con la gate roja.
++    /// </summary>
++    public interface IToriiExclusiveMod
++    {
++    }
++}
+diff --git a/osu.Game/Rulesets/Mods/ModPitchAdjust.cs b/osu.Game/Rulesets/Mods/ModPitchAdjust.cs
+new file mode 100644
+index 0000000000..8bd5d2224a
+--- /dev/null
++++ b/osu.Game/Rulesets/Mods/ModPitchAdjust.cs
+@@ -0,0 +1,231 @@
++// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
++// See the LICENCE file in the repository root for full licence text.
++
++using System;
++using System.Globalization;
++using osu.Framework.Audio;
++using osu.Framework.Bindables;
++using osu.Framework.Graphics.Sprites;
++using osu.Framework.Localisation;
++using osu.Game.Configuration;
++using osu.Game.Graphics;
++using osu.Game.Online.API;
++using osu.Game.Overlays.Settings;
++using osu.Game.Utils;
++
++namespace osu.Game.Rulesets.Mods
++{
++    /// <summary>
++    /// A Torii-original Fun mod that shifts the song's pitch up or down without
++    /// changing playback speed. Pure audio effect — does not touch hit-object
++    /// timing, judgement windows, or anything that affects difficulty.
++    /// </summary>
++    /// <remarks>
++    /// <para>
++    /// The trick: <see cref="AdjustableProperty.Frequency"/> changes the playback
++    /// rate, which couples pitch + speed (this is what stable DT does — chipmunks).
++    /// <see cref="AdjustableProperty.Tempo"/> uses BASS_FX time-stretching to
++    /// change speed while preserving pitch. Setting Frequency = N AND Tempo = 1/N
++    /// composes to "pitch shifted by N, speed unchanged".
++    /// </para>
++    /// <para>
++    /// This mod is intentionally ranked and carries a 1.0× score multiplier — pitch
++    /// shift in isolation is not a difficulty modifier. The server-side
++    /// <c>mods_can_get_pp</c> check in g0v0-server permits any pitch_shift value,
++    /// matching this client-side stance. <see cref="Mod.Ranked"/> defaults to
++    /// FALSE, so the override below is what actually makes that true — without it
++    /// the mod select showed "Unranked" while the server happily awarded pp.
++    /// </para>
++    /// <para>
++    /// Can stack with fixed rate mods. Adaptive speed stays blocked because it
++    /// changes rate continuously while PA is trying to keep one pitch offset.
++    /// </para>
++    /// </remarks>
++    public class ModPitchAdjust : Mod, IApplicableToTrack, IToriiExclusiveMod
++#if PATCHSU_REPLAY_MOD_TOGGLES
++        , IToggleableInReplay
++#endif
++    {
++        public override string Name => "Pitch Adjust";
++        public override string Acronym => "PA";
++        public override IconUsage? Icon => OsuIcon.ModPitchAdjust;
++        public override ModType Type => ModType.Fun;
++        public override LocalisableString Description =>
++            "Shift the song's pitch up or down without changing playback speed.";
++
++        public override bool Ranked => true;
++
++        public override Type[] IncompatibleMods => new[]
++        {
++            typeof(ModAdaptiveSpeed),
++        };
++
++        // Two operating ranges for the pitch slider, gated by the
++        // ExtendedLimits toggle below. The "safe" range is what you actually
++        // want to use — BASS_FX time-stretching beyond ±1 octave starts
++        // gargling the audio into noise. The "extended" range is for
++        // novelty / hush-hush territory: anything below ~0.3× sounds like
++        // an eldritch warble, anything above ~2.5× is full chipmunk.
++        private const double safe_min = 0.5;
++        private const double safe_max = 2.0;
++        private const double extended_min = 0.1;
++        private const double extended_max = 3.0;
++
++        [SettingSource(
++            "Pitch shift",
++            "Multiplier applied to pitch (1.0 = no change). 0.7 ≈ 5 semitones down, 1.4 ≈ 5 semitones up.",
++            SettingControlType = typeof(MultiplierSettingsSlider))]
++        public BindableNumber<double> PitchShift { get; } = new BindableDouble(1.0)
++        {
++            // Initialised to the SAFE range. The ExtendedLimits handler
++            // below widens / narrows these on toggle. We don't initialise
++            // straight to the extended range so users who never touch the
++            // extended-limits checkbox can't accidentally land on a 0.1×
++            // value just by dragging the slider all the way down.
++            MinValue = safe_min,
++            MaxValue = safe_max,
++            Default = 1.0,
++            Precision = 0.01,
++        };
++
++        [SettingSource(
++            "Extended limits",
++            "Allow extreme pitch shifts (0.1× to 3.0× instead of the safe 0.5× to 2.0× range). " +
++            "Outside the safe band the BASS time-stretcher produces heavy artifacting — the audio " +
++            "stops resembling music and starts to sound like a chipmunk choir or an eldritch warble.")]
++        public BindableBool ExtendedLimits { get; } = new BindableBool();
++
++        // Track-side adjustment bindables. Recomputed on every PitchShift
++        // change so the live audio reacts mid-song without restarting the
++        // track.
++        private readonly BindableDouble freqAdjust = new BindableDouble(1);
++        private readonly BindableDouble tempoAdjust = new BindableDouble(1);
++
++        public ModPitchAdjust()
++        {
++            // Frequency = N shifts both pitch AND speed by N (sample-rate scaling).
++            // Tempo = 1/N undoes the speed change via BASS_FX time-stretch while
++            // preserving the pitch shift. Net: pitch ×N, speed unchanged.
++            PitchShift.BindValueChanged(v =>
++            {
++                freqAdjust.Value = v.NewValue;
++                tempoAdjust.Value = 1.0 / v.NewValue;
++            }, true);
++
++            // Widen / narrow the slider range when the extended-limits
++            // toggle flips. Order matters here:
++            //
++            //   - Widening (off → on): set MaxValue first (3.0), then
++            //     MinValue (0.1). Either order works because we're only
++            //     loosening the bounds, but we keep the convention so the
++            //     narrowing branch stays readable next to it.
++            //
++            //   - Narrowing (on → off): set MaxValue first (2.0). If the
++            //     current PitchShift value was above 2.0, the BindableNumber
++            //     auto-clamps it down to 2.0. Then set MinValue (0.5) which
++            //     will auto-clamp upward if the value was below 0.5.
++            //     Setting MinValue first when MaxValue is still 3.0 would
++            //     work too, but the framework throws if MinValue > MaxValue
++            //     transiently — keeping Max-then-Min is the universally
++            //     safe order.
++            //
++            // BindValueChanged with `true` fires immediately with the current
++            // (default) value of false, which sets the safe range that
++            // matches what we already initialised PitchShift with — so the
++            // first call is a no-op effect-wise.
++            ExtendedLimits.BindValueChanged(v =>
++            {
++                if (v.NewValue)
++                {
++                    PitchShift.MaxValue = extended_max;
++                    PitchShift.MinValue = extended_min;
++                }
++                else
++                {
++                    PitchShift.MaxValue = safe_max;
++                    PitchShift.MinValue = safe_min;
++                }
++            }, true);
++        }
++
++        public void ApplyToTrack(IAdjustableAudioComponent track)
++        {
++            track.AddAdjustment(AdjustableProperty.Frequency, freqAdjust);
++            track.AddAdjustment(AdjustableProperty.Tempo, tempoAdjust);
++        }
++
++#if PATCHSU_REPLAY_MOD_TOGGLES
++        /// <summary>
++        /// Patchsu (replay mod toggles, built when 0005 is applied): nothing to do here. While switched off in a replay,
++        /// the replay player cancels this mod's frequency / tempo adjustments on the track, so the song plays at its
++        /// normal pitch.
++        /// </summary>
++        public void SetReplayEffectsEnabled(bool enabled, ReplayModToggleContext context)
++        {
++        }
++#endif
++
++        /// <summary>
++        /// Override the per-setting copy hook so the deserialisation order doesn't
++        /// silently clamp extended-range pitch values back into the safe band.
++        /// </summary>
++        /// <remarks>
++        /// <para>
++        /// <see cref="osu.Game.Scoring.ConfiguredModExtensions.ToMod"/> iterates settings in property-declaration
++        /// order. <see cref="PitchShift"/> is declared above <see cref="ExtendedLimits"/>,
++        /// so when a replay carries <c>{pitch_shift: 3.0, extended_limits: true}</c>
++        /// the framework sets PitchShift first — and because the bindable still
++        /// has its default <c>MaxValue</c> of 2.0 at that point, BindableDouble
++        /// auto-clamps the incoming 3.0 down to 2.0. Then ExtendedLimits widens
++        /// the range, but the value's already been corrupted: the leaderboard
++        /// shows 2× and the replay plays at 2× even though the player heard 3×
++        /// at submission time.
++        /// </para>
++        /// <para>
++        /// Fix: when an out-of-safe-range value is being copied into PitchShift,
++        /// pre-flip ExtendedLimits BEFORE delegating to the base. That widens
++        /// the bindable's bounds first so the subsequent assignment doesn't clamp.
++        /// Mirrors the explicit guard <see cref="DifficultyBindable.Value"/>
++        /// applies for the Difficulty Adjust mod, which solved the same class
++        /// of bug in upstream lazer.
++        /// </para>
++        /// </remarks>
++        internal override void CopyAdjustedSetting(IBindable target, object source)
++        {
++            if (ReferenceEquals(target, PitchShift))
++            {
++                double? incoming = tryExtractDoubleValue(source);
++                if (incoming.HasValue && (incoming.Value > safe_max || incoming.Value < safe_min))
++                    ExtendedLimits.Value = true;
++            }
++
++            base.CopyAdjustedSetting(target, source);
++        }
++
++        /// <summary>
++        /// Best-effort coercion of a CopyAdjustedSetting source (which can be a
++        /// raw boxed numeric, a string from JSON parsing, or another IBindable
++        /// when the framework is binding two settings together) into a double we
++        /// can compare against the safe / extended thresholds.
++        /// </summary>
++        private static double? tryExtractDoubleValue(object source)
++        {
++            if (source is IBindable b)
++            {
++                object? underlying = BindableValueAccessor.GetValue(b);
++                source = underlying ?? source;
++            }
++
++            return source switch
++            {
++                double d => d,
++                float f => f,
++                int i => i,
++                long l => l,
++                decimal m => (double)m,
++                string s when double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out double parsed) => parsed,
++                _ => null,
++            };
++        }
++    }
++}
+diff --git a/osu.Game/Textures/Icons/Mods/torii-pitch-adjust.png b/osu.Game/Textures/Icons/Mods/torii-pitch-adjust.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..8d4c42b0418f6ac78b37611b2e5d000b5a835479
+GIT binary patch
+literal 1142
+zcmeAS@N?(olHy`uVBq!ia0y~yV5neVU<l!0V_;zL<oZ0Hfq_9G*(1o8fuTx`fuW&=
+zf#DYe14F|L28L1t28LG&3=CE?7#PG0=IjczVPIfjOY(MiVfYV%3-&Ib%)r3FUgGKN
+z%KnO5lv!ARamukQ1_lPz64!{5l*E!$tK_28#FA77BLgEdT|+}%Bf}5_V=F^TD`PWl
+z0|P4qgWH>Q)KN6#=BH$)RpQpL>iv}23=9k!a2rZ8b5n~;5_1bM^_ZALED7}3{*r-#
+zIn2|=F{I+w+dJpIMG|F>fBgPx)kII1v=Fwa5H`=Uw-0o!#J;F|1hnre@3wL~{;$b_
+z=T+SGS5l7_HYs#*ZPtr){Q3L#)5w`+=_P4b=gxdz7iYln`rHqj^X>1?7@xD_Rzd-f
+z0#)C$O_@0J=)Sm>BKa1pE6o?Ym~^P;2D1)xcjb1|KBje>Jr{&7ke6U`Yb-v%Q6OD0
+zul)98sXN<(!k#BS5HS$jCisA3gZZ9x-WO+g>wDhPdeC##Qmjsne|@?7o9(m8_nW<*
+z;(a@0?$YOa4_XptuRV9ESiIl@ClB*-+wgQLJ*K{uw-^(+EM70|Kl|y*&n%8@!V)~!
+zug`sPpUHs#4g0Q7?@DGleoSJhkU8|0g)ir@p>E4h$qH_t_FTppJj?$$eHJMYwUA=U
+zyQcJkw}Ssni@|*c`9}GP(Tff)x-aL-esuCyp7*`0&q+RzHDLd9GvR*U9_v}twl|nh
+z+GZu~BCoV$$9_GL^Ni=2=Why27o5+L+j_krydnC4@`LbOufCkfKEPJPvHV`?y~90^
+zO%t+&7nbpCO%yny&-!K#Q<)#5_40<f!3WN1COj9}P|S715-fb~^Z!NLeQ(ZVbk}?!
+zp~)1>>%WG}pYeJpXSsonku~!h?uUBfm9{}snEF<5e`hgZjA81VTKct_iBIWa8AEu3
+zb)u=us=J@_>V;VEMC=qku$RX>M(e=3J-;U`*~0k#!kIFe9kUDn2EF}!qcvn!L$tx>
+zw~TpA?3>Maf6V><Lq*f|fbOiDe9X^h-^k~ynEG8pRkP-R?wp(7m}`CCm~-wqS3PHv
+zh}8qJ^EvyO?GK;&zhxfdcVoSof=)XozFjr*Y;@J>v@*-LE;@gDSIxBbsQe>pJlkmV
+z!VGKG<`V~cXWxuzE6C1E;gK-5PD$fGo1^$}hIg7-Zrb&;Yu58T6#FGI_wbo-+6BB7
+zOffw7A6{hr!~1$x9E1L0rER5e|2_P*tmTx1;pUratIDsPaoZdcc2{-bwy!g8<{7{4
+z`&}z3vbQPPZ1dXC#Mpvv>Am6G6hcmV8vmZOv1)!>c4p?PHM*H;ujf3UnX4`OEh$Jm
+zK)=Az`1TtvTQ1Jf8^Zh4GFc<CUQB5E>#ymieD-D7!LANeApM_#kKy6dh?by944?wV
+L)z4*}Q$iB}+2Pzr
+
+literal 0
+HcmV?d00001
+
+diff --git a/osu.Game/osu.Game.csproj b/osu.Game/osu.Game.csproj
+index 91a13c3859..6cdf8d2314 100644
+--- a/osu.Game/osu.Game.csproj
++++ b/osu.Game/osu.Game.csproj
+@@ -11,6 +11,9 @@
+     <PackageIcon>icon.png</PackageIcon>
+     <IsPackable>true</IsPackable>
+   </PropertyGroup>
++  <ItemGroup Label="Torii mod icons">
++    <EmbeddedResource Include="Textures\Icons\Mods\torii-*.png" />
++  </ItemGroup>
+   <ItemGroup Label="Icon">
+     <None Include="..\assets\lazer-nuget.png">
+       <Pack>True</Pack>

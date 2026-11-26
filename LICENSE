@@ -28,9 +28,9 @@ Third-party code
   Copyright (c) ppy Pty Ltd <contact@ppy.sh> and MIT licensed. It is included
   only as a git submodule (Patchsu/osu-lazer) and is not covered by the
   copyright line above.
-- 0003-mods-from-Ritsu.patch contains code derived from Modosu (Azuuryy) and
+- 0500-Ritsu-Mods.patch contains code derived from Modosu (Azuuryy) and
   MOsu (p-720), licensed under the GNU General Public License v3.0. The patch adds
-  the full license text as LICENCE-Modosu.txt. A build that includes 0003
+  the full license text as LICENCE-Modosu.txt. A build that includes 0500
   is distributed under GPL-3.0.
-- 0003 and 0010 port code from Ritsu (https://github.com/Azuuryy/ritsu, MIT),
-  and 0004 / 0006 port code from Torii (ShikkesoraSIM).
+- 0500 and 0007 port code from Ritsu (https://github.com/Azuuryy/ritsu, MIT),
+  and 0501 / 0004 port code from Torii (ShikkesoraSIM).

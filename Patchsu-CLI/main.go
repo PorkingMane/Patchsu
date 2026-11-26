@@ -28,7 +28,7 @@ import (
 )
 
 // Version is set at release time with -ldflags "-X main.Version=...".
-var Version = "1.0"
+var Version = "1.1"
 
 // The Windows icon and version info of Patchsu-CLI.exe (rsrc_windows_*.syso, committed).
 //go:generate go run github.com/tc-hib/go-winres@v0.3.3 simply --icon internal/bundle/logo/patchsu.ico --arch amd64,arm64 --manifest cli --product-name Patchsu-CLI --file-description "Patchsu-CLI: builds osu!lazer with Patchsu patches" --original-filename Patchsu-CLI.exe
@@ -117,7 +117,7 @@ func main() {
 			fail(err.Error())
 		}
 	}
-	// A patches folder next to the program (e.g. this binary copied into the Patchsu folder) is used automatically,
+	// A patches folder next to the program (or the repo's Patchsu/patches for the dev build in Patchsu-CLI/) is used automatically,
 	// unless a release or another folder was asked for.
 	if f.local == "" && f.release == "" && cmd != "make-release" && cmd != "uninstall" {
 		f.local = besideExecutable()
@@ -145,7 +145,8 @@ func main() {
 	}
 }
 
-// besideExecutable returns <program folder>/patches when it has manifest.json or patches.meta.json, else "".
+// besideExecutable returns <program folder>/patches, or <program folder>/../Patchsu/patches (the dev build that
+// install-dev.sh puts into Patchsu-CLI/), when it has manifest.json or patches.meta.json, else "".
 func besideExecutable() string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -154,10 +155,12 @@ func besideExecutable() string {
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
 	}
-	dir := filepath.Join(filepath.Dir(exe), "patches")
-	for _, name := range []string{release.ManifestAsset, release.MetaFile} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			return dir
+	here := filepath.Dir(exe)
+	for _, dir := range []string{filepath.Join(here, "patches"), filepath.Join(here, "..", "Patchsu", "patches")} {
+		for _, name := range []string{release.ManifestAsset, release.MetaFile} {
+			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				return filepath.Clean(dir)
+			}
 		}
 	}
 	return ""

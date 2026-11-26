@@ -178,7 +178,7 @@ namespace osu.Game.Tests.Visual.Navigation
             AddStep("type #10000", () => goalBox().Text = "#10000");
             AddUntilStep("estimated PP shown", () => text($"#{10000:N0} • {LocalPriorityPolicy.EstimatePPForRank(10000):N0}pp") != null);
             AddStep("type #", () => goalBox().Text = "#");
-            AddUntilStep("no estimate for an unfinished goal", () => !window()!.ChildrenOfType<OsuSpriteText>().Any(t => t.IsPresent && t.Text.ToString().Contains('•')));
+            AddUntilStep("NaN placeholder for an unfinished goal", () => text("#NaN • NaNpp") != null);
             AddStep("type #10000", () => goalBox().Text = "#10000");
             AddStep("start", () =>
             {

@@ -66,7 +66,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
     rm -rf -- "$PREFIX"
     rm -f -- "$DESKTOP_FILE"
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$DATA_HOME/applications" >/dev/null 2>&1 || true
-    say "Done. Your osu! data (including local profiles in $DATA_HOME/osu/osu-local) is untouched."
+    say "Done. Your osu! data (including Patchsu settings and local profiles in $DATA_HOME/osu/patchsu-osu) is untouched."
     exit 0
 fi
 
@@ -158,4 +158,4 @@ fi
 say "Done."
 echo "  Game:     $EXECUTABLE"
 [ "$CREATE_DESKTOP" -eq 1 ] && echo "  Menu:     Patchsu"
-echo "  Data:     $DATA_HOME/osu  (shared with the official osu!lazer; local profiles in osu-local/)"
+echo "  Data:     $DATA_HOME/osu  (shared with the official osu!lazer; Patchsu settings and local profiles in patchsu-osu/)"

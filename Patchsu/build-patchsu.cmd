@@ -107,12 +107,12 @@ if errorlevel 1 echo Warning: could not create the Start Menu shortcut. You can 
 echo ==^> Done.
 echo   Game:  "%PREFIX%\Patchsu.exe"
 echo   Menu:  Patchsu
-echo   Data:  %APPDATA%\osu  (shared with the official osu!lazer; local profiles in osu-local\)
+echo   Data:  %APPDATA%\osu  (shared with the official osu!lazer; Patchsu settings and local profiles in patchsu-osu\)
 exit /b 0
 
 :uninstall
 echo ==^> Removing "%PREFIX%" and the Start Menu shortcut
 if exist "%PREFIX%" rmdir /s /q "%PREFIX%"
 if exist "%SHORTCUT%" del /q "%SHORTCUT%"
-echo ==^> Done. Your osu! data (including local profiles in %APPDATA%\osu\osu-local) is untouched.
+echo ==^> Done. Your osu! data (including Patchsu settings and local profiles in %APPDATA%\osu\patchsu-osu) is untouched.
 exit /b 0

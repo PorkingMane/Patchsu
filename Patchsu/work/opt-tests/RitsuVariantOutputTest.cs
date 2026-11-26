@@ -1,5 +1,5 @@
-// Patchsu optimisation pass local test (not part of any patch): dumps what the Ritsu / Modosu conversion mods (0003) make of real beatmaps,
-// so two builds (before / after a change) can be compared byte for byte. Needs 0003.
+// Patchsu optimisation pass local test (not part of any patch): dumps what the Ritsu / Modosu conversion mods (0500) make of real beatmaps,
+// so two builds (before / after a change) can be compared byte for byte. Needs 0500.
 // Copy into osu.Game.Rulesets.Osu.Tests and run `PATCHSU_DUMP=/path/out.txt dotnet test --filter RitsuVariantOutputTest`.
 
 using System;

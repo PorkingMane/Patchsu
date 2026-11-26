@@ -517,7 +517,7 @@ func (m *Manifest) Resolve(ids []string) (Selection, []string, error) {
 	return s, added, nil
 }
 
-// Label is "0007 Replay mod toggles".
+// Label is "0005 Replay mod toggles".
 func (p *Patch) Label() string { return p.ID + " " + p.Name }
 
 // Labels returns "id name" for each id, joined with ", ".

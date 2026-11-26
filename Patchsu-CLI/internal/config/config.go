@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/PorkingMane/Patchsu/Patchsu-CLI/internal/manifest"
 	"github.com/PorkingMane/Patchsu/Patchsu-CLI/internal/sysinfo"
 )
 
@@ -17,6 +18,8 @@ type Config struct {
 	Server  string   `json:"server,omitempty"`  // last custom server chosen for the "Custom server" preset
 	// InstallDir is the folder the game goes into (<InstallDir>/Patchsu, Patchsu.app on macOS); "" = the standard place.
 	InstallDir string `json:"installDir,omitempty"`
+	// IDScheme is the patch numbering Patches is written in (see manifest.IDScheme); 0 = the first release's.
+	IDScheme int `json:"idScheme,omitempty"`
 }
 
 // Path is the config file location. PATCHSU_CLI_CONFIG overrides it (tests use it to keep the real file untouched).
@@ -33,6 +36,8 @@ func Load() *Config {
 	if data, err := os.ReadFile(Path()); err == nil {
 		_ = json.Unmarshal(data, c)
 	}
+	c.Patches = manifest.MigrateIDs(c.Patches, c.IDScheme)
+	c.IDScheme = manifest.IDScheme
 	return c
 }
 

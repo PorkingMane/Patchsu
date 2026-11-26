@@ -1,0 +1,280 @@
+Patchsu patch 8 (optional): incompatible mods made compatible.
+
+Needs 0001 only (no local profiles needed). Also applies together with every other patch (in glob order).
+
+Settings → Patchsu → "Patch 8. Mod compatability": one toggle per normally incompatible mod combination. Off by default,
+so nothing changes until a toggle is turned on.
+
+  Hard Rock + Mirror (osu! ruleset): both flips apply. Hard Rock flips vertically, so Mirror on "Vertical" cancels
+                                     Hard Rock's flip and "Both" leaves only a horizontal flip. HR's CS/AR/OD/HP
+                                     boost and its difficulty/PP effect stay as usual.
+
+Behaviour:
+- While a toggle is on, the mod select overlay, presets and the gameplay mod check treat the pair as compatible.
+- Turning a toggle off while both mods are selected deselects the second one (Mirror) and keeps Hard Rock.
+- Scores/replays using an allowed combination always import, even while its toggle is off.
+- Other incompatibilities stay (e.g. Hard Rock + Easy / Difficulty Adjust).
+
+How it works (for later combinations):
+- osu.Game/Rulesets/Mods/ModCompatibilityOverrides.cs: the list of combinations (name, hint, setting name, the two mod
+  types). A mod's IncompatibleMods leaves out the other mod while ModCompatibilityOverrides.<Pair>.Allowed is true.
+  To add one: a new entry in All (its setting is kept in the "ModCompatibility" section of PatchsuSettings.json from
+  0001, off by default) and the Allowed check in both mods. HR + MR's value from older builds is taken over from game.ini once.
+- OsuGameBase copies each setting into the static Enabled flag and re-checks SelectedMods when one changes.
+- ModCompatibilityOverrides.AllowAll() (thread-local scope) is used by ScoreImporter.
+- Settings UI: osu.Game/LocalPriority/ModCompatibilitySettings.cs (built from the list). It is a
+  PatchSettingsSubsection (from 0001), which Settings → Patchsu finds by itself and sorts by patch number,
+  so this patch doesn't edit LocalPrioritySection.
+
+diff --git a/osu.Game.Rulesets.Osu/Mods/OsuModHardRock.cs b/osu.Game.Rulesets.Osu/Mods/OsuModHardRock.cs
+index 84d0dc5244..70d91fdab1 100644
+--- a/osu.Game.Rulesets.Osu/Mods/OsuModHardRock.cs
++++ b/osu.Game.Rulesets.Osu/Mods/OsuModHardRock.cs
+@@ -13,7 +13,10 @@ namespace osu.Game.Rulesets.Osu.Mods
+ {
+     public class OsuModHardRock : ModHardRock, IApplicableToHitObject
+     {
+-        public override Type[] IncompatibleMods => base.IncompatibleMods.Append(typeof(ModMirror)).ToArray();
++        // Patchsu: Mirror can be allowed in Settings → Patchsu → Patch 8.
++        public override Type[] IncompatibleMods => ModCompatibilityOverrides.HardRockMirror.Allowed
++            ? base.IncompatibleMods
++            : base.IncompatibleMods.Append(typeof(ModMirror)).ToArray();
+ 
+         public void ApplyToHitObject(HitObject hitObject)
+         {
+diff --git a/osu.Game.Rulesets.Osu/Mods/OsuModMirror.cs b/osu.Game.Rulesets.Osu/Mods/OsuModMirror.cs
+index 4af88caee4..2c3f136d4e 100644
+--- a/osu.Game.Rulesets.Osu/Mods/OsuModMirror.cs
++++ b/osu.Game.Rulesets.Osu/Mods/OsuModMirror.cs
+@@ -15,7 +15,10 @@ namespace osu.Game.Rulesets.Osu.Mods
+     public class OsuModMirror : ModMirror, IApplicableToHitObject
+     {
+         public override LocalisableString Description => "Flip objects on the chosen axes.";
+-        public override Type[] IncompatibleMods => new[] { typeof(ModHardRock) };
++        // Patchsu: Hard Rock can be allowed in Settings → Patchsu → Patch 8.
++        public override Type[] IncompatibleMods => ModCompatibilityOverrides.HardRockMirror.Allowed
++            ? Array.Empty<Type>()
++            : new[] { typeof(ModHardRock) };
+ 
+         [SettingSource("Flipped axes")]
+         public Bindable<MirrorType> Reflection { get; } = new Bindable<MirrorType>();
+diff --git a/osu.Game/LocalPriority/ModCompatibilitySettings.cs b/osu.Game/LocalPriority/ModCompatibilitySettings.cs
+new file mode 100644
+index 0000000000..1096de290a
+--- /dev/null
++++ b/osu.Game/LocalPriority/ModCompatibilitySettings.cs
+@@ -0,0 +1,44 @@
++// Patched for fun and personal needs. I suggest playing osu!lazer instead of this client. All modifications are done with AI from personal interest.
++// Peppy openly stated that he does not like using AI and we completely respect it. I only do it for research purposes and to see what features I would love in lazer.
++// To use it you'll need to compile it on your PC using provided .sh / .cmd files.
++// This client modification does not break any osu! rules or terms of service and do not conflict with osu! rules for account banning
++// However, I do not take any liablity if your account will be banned for accessing beatmap, leaderboard and metadata downloading
++// Use responsibly and preferably local-only.
++
++using System.Collections.Generic;
++using System.Linq;
++using osu.Framework.Allocation;
++using osu.Framework.Localisation;
++using osu.Game.Graphics.UserInterfaceV2;
++using osu.Game.Overlays.Settings;
++using osu.Game.Rulesets.Mods;
++
++namespace osu.Game.LocalPriority
++{
++    /// <summary>
++    /// Settings → Patchsu → "Patch 8. Mod compatability": lets normally incompatible mod combinations be used together,
++    /// one toggle per combination.
++    /// </summary>
++    public partial class ModCompatibilitySettings : PatchSettingsSubsection
++    {
++        public override int PatchNumber => 8;
++
++        protected override string Summary => @"Mod compatability";
++
++        public override IEnumerable<LocalisableString> FilterTerms => base.FilterTerms.Concat(new LocalisableString[] { @"mod", @"incompatible", @"compatible", @"compatibility", @"combination" });
++
++        [BackgroundDependencyLoader]
++        private void load()
++        {
++            Children = ModCompatibilityOverrides.All.Select(o => new SettingsItemV2(new FormCheckBox
++            {
++                Caption = o.Name,
++                HintText = o.Description,
++                Current = o.GetSetting(),
++            })
++            {
++                Keywords = o.Keywords,
++            }).ToArray();
++        }
++    }
++}
+diff --git a/osu.Game/OsuGameBase.cs b/osu.Game/OsuGameBase.cs
+index 2f7478c069..6ae6f83393 100644
+--- a/osu.Game/OsuGameBase.cs
++++ b/osu.Game/OsuGameBase.cs
+@@ -463,6 +463,36 @@ private void load(ReadableKeyCombinationProvider keyCombinationProvider, Framewo
+             // if this becomes a more common thing, tracked settings should be reconsidered to allow local DI.
+             LocalConfig.LookupSkinName = id => SkinManager.Query(s => s.ID == id)?.ToString() ?? "Unknown";
+             LocalConfig.LookupKeyBindings = l => KeyBindingStore.GetBindingsStringFor(l);
++
++            // Patchsu: incompatible mod combinations the user allowed (Settings → Patchsu → Patch 8).
++            foreach (var compatibilityOverride in ModCompatibilityOverrides.All)
++            {
++                var setting = compatibilityOverride.GetSetting();
++                modCompatibilitySettings.Add(setting);
++                compatibilityOverride.Enabled = setting.Value;
++                setting.BindValueChanged(e => onModCompatibilityChanged(compatibilityOverride, e.NewValue));
++            }
++        }
++
++        private readonly List<Bindable<bool>> modCompatibilitySettings = new List<Bindable<bool>>();
++
++        private void onModCompatibilityChanged(ModCompatibilityOverride compatibilityOverride, bool enabled)
++        {
++            compatibilityOverride.Enabled = enabled;
++
++            if (SelectedMods.Disabled)
++                return;
++
++            var mods = SelectedMods.Value;
++
++            // turned off while both are selected: keep the first one.
++            if (!enabled && mods.Any(compatibilityOverride.First.IsInstanceOfType) && mods.Any(compatibilityOverride.Second.IsInstanceOfType) && !ModUtils.CheckCompatibleSet(mods))
++                SelectedMods.Value = mods.Where(m => !compatibilityOverride.Second.IsInstanceOfType(m)).ToArray();
++            else
++            {
++                // so the mod select overlay re-evaluates which mods show as incompatible.
++                SelectedMods.TriggerChange();
++            }
+         }
+ 
+         private void updateLanguage() => CurrentLanguage.Value = LanguageExtensions.GetLanguageFor(frameworkLocale.Value, localisationParameters.Value);
+diff --git a/osu.Game/Rulesets/Mods/ModCompatibilityOverrides.cs b/osu.Game/Rulesets/Mods/ModCompatibilityOverrides.cs
+new file mode 100644
+index 0000000000..8ab835d57e
+--- /dev/null
++++ b/osu.Game/Rulesets/Mods/ModCompatibilityOverrides.cs
+@@ -0,0 +1,104 @@
++// Added by Patchsu
++
++using System;
++using System.Collections.Generic;
++using osu.Framework.Bindables;
++using osu.Game.LocalPriority;
++
++namespace osu.Game.Rulesets.Mods
++{
++    /// <summary>
++    /// Patchsu: mod pairs that are normally incompatible, which the user can allow together
++    /// (Settings → Patchsu → Patch 8).
++    /// </summary>
++    public static class ModCompatibilityOverrides
++    {
++        /// <summary>
++        /// This patch's section of PatchsuSettings.json: one value per combination, named like its old game.ini setting.
++        /// </summary>
++        public const string SETTINGS_SECTION = @"ModCompatibility";
++
++        public static readonly ModCompatibilityOverride HardRockMirror = new ModCompatibilityOverride(
++            "Hard Rock + Mirror",
++            "Hard Rock's vertical flip stacks with Mirror's. Mirror on \"Vertical\" cancels it out.",
++            @"ModCompatibilityHardRockMirror",
++            typeof(ModHardRock), typeof(ModMirror),
++            new[] { "hr", "mr", "flip" });
++
++        public static IReadOnlyList<ModCompatibilityOverride> All { get; } = new[]
++        {
++            HardRockMirror,
++        };
++
++        [ThreadStatic]
++        private static int allowAllDepth;
++
++        internal static bool AllowingAll => allowAllDepth > 0;
++
++        /// <summary>
++        /// Treats every combination listed here as allowed on the current thread until disposed,
++        /// whatever the settings say (e.g. so saved scores using them can still be imported).
++        /// </summary>
++        public static IDisposable AllowAll()
++        {
++            allowAllDepth++;
++            return new AllowAllScope();
++        }
++
++        private sealed class AllowAllScope : IDisposable
++        {
++            private bool disposed;
++
++            public void Dispose()
++            {
++                if (disposed)
++                    return;
++
++                disposed = true;
++                allowAllDepth--;
++            }
++        }
++    }
++
++    public sealed class ModCompatibilityOverride
++    {
++        public readonly string Name;
++        public readonly string Description;
++        /// <summary>
++        /// The combination's name in <see cref="ModCompatibilityOverrides.SETTINGS_SECTION"/> (and in game.ini, where it used to be kept).
++        /// </summary>
++        public readonly string Setting;
++
++        /// <summary>
++        /// The two mod types this combination is about. When it gets turned off, a selected <see cref="Second"/> is deselected.
++        /// </summary>
++        public readonly Type First, Second;
++
++        public readonly string[] Keywords;
++
++        /// <summary>
++        /// Set from <see cref="GetSetting"/> by the game.
++        /// </summary>
++        public bool Enabled { get; set; }
++
++        /// <summary>
++        /// Whether the two mods may currently be used together.
++        /// </summary>
++        public bool Allowed => Enabled || ModCompatibilityOverrides.AllowingAll;
++
++        public ModCompatibilityOverride(string name, string description, string setting, Type first, Type second, string[] keywords)
++        {
++            Name = name;
++            Description = description;
++            Setting = setting;
++            First = first;
++            Second = second;
++            Keywords = keywords;
++        }
++
++        /// <summary>
++        /// Whether the user allowed this combination (Settings → Patchsu → Patch 8).
++        /// </summary>
++        public Bindable<bool> GetSetting() => PatchsuSettings.Current.GetBindable(ModCompatibilityOverrides.SETTINGS_SECTION, Setting, false, Setting);
++    }
++}
+diff --git a/osu.Game/Scoring/ScoreImporter.cs b/osu.Game/Scoring/ScoreImporter.cs
+index 6704875df6..e6988c57c4 100644
+--- a/osu.Game/Scoring/ScoreImporter.cs
++++ b/osu.Game/Scoring/ScoreImporter.cs
+@@ -91,8 +91,12 @@ protected override void Populate(ScoreInfo model, ArchiveReader? archive, Realm
+             ArgumentNullException.ThrowIfNull(model.BeatmapInfo);
+             ArgumentNullException.ThrowIfNull(model.Ruleset);
+ 
+-            if (!ModUtils.CheckCompatibleSet(model.Mods))
+-                throw new InvalidOperationException(@"The score specifies an incompatible set of mods!");
++            // Patchsu: scores using a combination allowed in Settings → Patchsu → Patch 8 import even while it's turned off.
++            using (Rulesets.Mods.ModCompatibilityOverrides.AllowAll())
++            {
++                if (!ModUtils.CheckCompatibleSet(model.Mods))
++                    throw new InvalidOperationException(@"The score specifies an incompatible set of mods!");
++            }
+ 
+             if (string.IsNullOrEmpty(model.StatisticsJson))
+                 model.StatisticsJson = JsonConvert.SerializeObject(model.Statistics);

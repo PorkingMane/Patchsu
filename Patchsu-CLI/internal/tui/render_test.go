@@ -33,28 +33,28 @@ func TestPickerFlow(t *testing.T) {
 	if v := show("start"); !strings.Contains(v, "‹ Vanilla+ ›") || !strings.Contains(v, "builds Patchsu") {
 		t.Fatal("first preset not selected")
 	}
-	// Cursor to 0006 (row 7, after 0005b) and select it: 0002 gets pulled in.
-	for i := 0; i < 7; i++ {
+	// Cursor to 0004 (row 5, after 0003b) and select it: 0002 gets pulled in.
+	for i := 0; i < 5; i++ {
 		key("down")
 	}
 	key(" ")
-	if v := show("0006 on"); !strings.Contains(v, "Also enabled 1: 0002 Local profiles") || !strings.Contains(v, "Custom (from Vanilla+)") {
+	if v := show("0004 on"); !strings.Contains(v, "Also enabled 1: 0002 Local profiles") || !strings.Contains(v, "Custom (from Vanilla+)") {
 		t.Fatalf("notice/custom missing:\n%s", v)
 	}
-	// Cursor to 0002 (row 2) and deselect: 0006 goes too.
-	for i := 0; i < 5; i++ {
+	// Cursor to 0002 (row 2) and deselect: 0004 goes too.
+	for i := 0; i < 3; i++ {
 		key("k")
 	}
 	key(" ")
 	// That's Vanilla+ again, so the preset is recognised once more.
-	if v := show("0002 off"); !strings.Contains(v, "Also disabled 1: 0006") || !strings.Contains(v, "‹ Vanilla+ ›") {
+	if v := show("0002 off"); !strings.Contains(v, "Also disabled 1: 0004") || !strings.Contains(v, "‹ Vanilla+ ›") {
 		t.Fatalf("disable notice / preset missing:\n%s", v)
 	}
 	key("tab")
 	if v := show("tab"); !strings.Contains(v, "‹ Local play ›") {
 		t.Fatalf("tab didn't move presets:\n%s", v)
 	}
-	// Custom server: the published server (Mamestagram, 0101) is chosen and names the build.
+	// Custom server: the published server (Mamestagram, 1000) is chosen and names the build.
 	key("tab")
 	// The server list sits above the patches, and the cursor stays on 0002.
 	if v := show("custom server"); !strings.Contains(v, "‹ Custom server ›") || !strings.Contains(v, "Servers available") ||
@@ -76,9 +76,9 @@ func TestPickerFlow(t *testing.T) {
 func TestPickerWithoutServers(t *testing.T) {
 	meta := `{"osuCommit":"abc",
  "patches":[{"id":"0001","file":"1.patch","name":"Online restrictions","required":true},
-  {"id":"0005","file":"5.patch","name":"Interface","needs":["0001"]}],
- "presets":[{"name":"Vanilla+","patches":["0005"]},{"name":"Custom server","patches":["0005"],"server":true}]}`
-	fsys := fstest.MapFS{"patches.meta.json": {Data: []byte(meta)}, "1.patch": {Data: []byte("1")}, "5.patch": {Data: []byte("5")}}
+  {"id":"0003","file":"3.patch","name":"Interface","needs":["0001"]}],
+ "presets":[{"name":"Vanilla+","patches":["0003"]},{"name":"Custom server","patches":["0003"],"server":true}]}`
+	fsys := fstest.MapFS{"patches.meta.json": {Data: []byte(meta)}, "1.patch": {Data: []byte("1")}, "3.patch": {Data: []byte("3")}}
 	src, err := release.FromFS(fsys)
 	if err != nil {
 		t.Fatal(err)
@@ -98,15 +98,15 @@ func TestPickerWithoutServers(t *testing.T) {
 func TestServerPicker(t *testing.T) {
 	meta := `{"osuCommit":"abc",
  "patches":[{"id":"0001","file":"1.patch","name":"Online restrictions","required":true},
-  {"id":"0005","file":"5.patch","name":"Interface","needs":["0001"]},
-  {"id":"0009","file":"9.patch","name":"More mods","needs":["0001"]},
-  {"id":"0101","file":"g.patch","name":"Gatari connection","needs":["0001"]},
-  {"id":"0111","file":"t.patch","name":"Torii connection","needs":["0001"]}],
- "presets":[{"name":"Vanilla+","patches":["0005"]},{"name":"Local play","patches":"*"},
-  {"name":"Custom server","patches":["0005"],"server":true}],
- "servers":[{"name":"Gatari","description":"osu!gatari","patches":["0101"]},{"name":"Torii","patches":["0111"]}]}`
+  {"id":"0003","file":"3.patch","name":"Interface","needs":["0001"]},
+  {"id":"0502","file":"502.patch","name":"More mods","needs":["0001"]},
+  {"id":"1000","file":"g.patch","name":"Gatari connection","needs":["0001"]},
+  {"id":"1010","file":"t.patch","name":"Torii connection","needs":["0001"]}],
+ "presets":[{"name":"Vanilla+","patches":["0003"]},{"name":"Local play","patches":"*"},
+  {"name":"Custom server","patches":["0003"],"server":true}],
+ "servers":[{"name":"Gatari","description":"osu!gatari","patches":["1000"]},{"name":"Torii","patches":["1010"]}]}`
 	fsys := fstest.MapFS{"patches.meta.json": {Data: []byte(meta)}}
-	for _, f := range []string{"1", "5", "9", "g", "t"} {
+	for _, f := range []string{"1", "3", "502", "g", "t"} {
 		fsys[f+".patch"] = &fstest.MapFile{Data: []byte(f)}
 	}
 	src, err := release.FromFS(fsys)
@@ -128,19 +128,19 @@ func TestServerPicker(t *testing.T) {
 	}
 	// The first row below the presets is Gatari: its description shows, and space picks it.
 	press(m, "down")
-	if v = m.View(); !strings.Contains(v, "─ Gatari ") || !strings.Contains(v, "osu!gatari") || !strings.Contains(v, "Patches: 0101 Gatari connection") {
+	if v = m.View(); !strings.Contains(v, "─ Gatari ") || !strings.Contains(v, "osu!gatari") || !strings.Contains(v, "Patches: 1000 Gatari connection") {
 		t.Fatalf("Gatari's description missing:\n%s", v)
 	}
 	press(m, " ")
 	if v = m.View(); !strings.Contains(v, "(•) Gatari") || !strings.Contains(v, "‹ Custom server ›") || m.buildName() != "Patchsu-Gatari" {
 		t.Fatalf("space didn't pick Gatari:\n%s", v)
 	}
-	// Adding a patch (0009: past Torii, 0001 and 0005) keeps the server: Custom (from Custom server), still Patchsu-Gatari.
+	// Adding a patch (0502: past Torii, 0001 and 0003) keeps the server: Custom (from Custom server), still Patchsu-Gatari.
 	for i := 0; i < 4; i++ {
 		press(m, "down")
 	}
 	press(m, " ")
-	if v = m.View(); !strings.Contains(v, "Custom (from Custom server)") || !strings.Contains(v, "[x] 0009") || m.buildName() != "Patchsu-Gatari" {
+	if v = m.View(); !strings.Contains(v, "Custom (from Custom server)") || !strings.Contains(v, "[x] 0502") || m.buildName() != "Patchsu-Gatari" {
 		t.Fatalf("custom server selection lost its server:\n%s", v)
 	}
 	m.dataDir = t.TempDir() // skip the data folder question; enter goes on to the check

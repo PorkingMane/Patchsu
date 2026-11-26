@@ -27,11 +27,11 @@ Already cloned without submodules? Run `git submodule update --init --depth 1` i
 ## 2. Choose the patches
 
 `build-patchsu.sh` / `.cmd` apply **every** `*.patch` in `Patchsu/patches/`, in file-name order. To build fewer, move the ones you
-don't want out of that folder. Keep what the remaining ones need (table in [PATCHES.md](PATCHES.md#dependencies-and-presets)):
+don't want out of that folder. Keep what the remaining ones need (table in [PATCHES.md](PATCHES.md)):
 
 - 0001 is always required.
-- 0006 and 0012 need 0002.
-- 0003 and 0004 get replay toggles for their mods when 0007 is applied too (nothing extra to pick).
+- 0004 and 0009 need 0002.
+- 0500 and 0501 get replay toggles for their mods when 0005 is applied too (nothing extra to pick).
 
 A missing dependency shows up as `git apply` failing or as a compile error.
 
@@ -62,11 +62,11 @@ If you'd rather do it yourself:
 
 ```sh
 git clone --shared Patchsu/osu-lazer my-osu && cd my-osu
-for p in ../Patchsu/patches/{0001,0002,0005}-*.patch; do git apply --whitespace=nowarn "$p"; done
+for p in ../Patchsu/patches/{0001,0002,0003}-*.patch; do git apply --whitespace=nowarn "$p"; done
 dotnet run --project osu.Desktop -c Release
 ```
 
-Apply them in file-name order (0003 before 0007, 0010 after 0008, and so on).
+Apply them in file-name order (0003 before 0003b, 0010 before 0500, and so on).
 
 ## Other scripts
 
@@ -79,12 +79,13 @@ Apply them in file-name order (0003 before 0007, 0010 after 0008, and so on).
 ## Caveats
 
 - **Data folder.** Patchsu uses the official osu! data folder (`~/.local/share/osu`, `%APPDATA%\osu`): beatmaps, skins, scores
-  and settings are shared with the official client. Patchsu's own data is in its `osu-local/` subfolder. Back it up if you care.
+  and settings are shared with the official client. Patchsu's own data is in its `patchsu-osu/` subfolder (every patch's settings in
+  `PatchsuSettings.json`, local profiles, caches; an old `osu-local/` folder is renamed on the first start). Back it up if you care.
 - **One at a time.** Only one of Patchsu and the official client can run at once; starting the second hands over to the first.
 - **Logging in.** Patchsu is a third-party client once patched. Logging into your osu! account in it can get you banned if you tinker passed whatever provided, even though
   0001 blocks everything but read-only requests. Local profiles need no account at all, but its really nice to be loggined in and download maps directly in-game.
-- **Scores made with patch-only mods** (0003, 0004, 0011's combinations) may not load correctly in the official client
+- **Scores made with patch-only mods** (0500, 0501, 0008's combinations) may not load correctly in the official client
   or in a Patchsu build without that patch. Treat them as local-only.
-- **Removing a patch later** keeps your data: profile data stays in `osu-local/`, collection folders are just collection names.
-- **License.** A build with 0003 contains GPL-3.0 code (Modosu); see [LICENSE](LICENSE).
+- **Removing a patch later** keeps your data: profile data and settings stay in `patchsu-osu/`, collection folders are just collection names.
+- **License.** A build with 0500 contains GPL-3.0 code (Modosu); see [LICENSE](LICENSE).
 - **Updates.** Patchsu never updates itself. Pull the repository (and its submodule) and build again.

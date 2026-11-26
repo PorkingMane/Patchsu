@@ -224,6 +224,7 @@ type BuildInfo struct {
 	OsuCommit  string    `json:"osuCommit"`
 	CLIVersion string    `json:"cliVersion"`
 	Built      time.Time `json:"built"`
+	IDScheme   int       `json:"idScheme,omitempty"` // patch numbering of Patches (manifest.IDScheme); 0 = the first release's
 }
 
 // ReadBuildInfo reads patchsu-build.json of an existing install, or nil.
@@ -236,6 +237,8 @@ func ReadBuildInfo(inst paths.Install) *BuildInfo {
 	if json.Unmarshal(data, &bi) != nil {
 		return nil
 	}
+	bi.Patches = manifest.MigrateIDs(bi.Patches, bi.IDScheme)
+	bi.IDScheme = manifest.IDScheme
 	return &bi
 }
 
@@ -248,6 +251,7 @@ func (b *Builder) writeBuildInfo() error {
 	bi := BuildInfo{
 		Name: b.Install.Name, Server: server, Patches: m.IDs(b.Selection), Preset: b.Preset, Release: b.Source.Describe(),
 		OsuCommit: m.OsuCommit, CLIVersion: b.CLIVersion, Built: time.Now().UTC().Truncate(time.Second),
+		IDScheme: manifest.IDScheme,
 	}
 	data, err := json.MarshalIndent(bi, "", "  ")
 	if err != nil {

@@ -29,4 +29,4 @@
 !/tools/merge_sections.py
 
 # Patchsu patches that should not be present publically just yet
-/Patchsu/patches/01*.patch
+/Patchsu/patches/1[0-9][0-9][0-9]-*.patch
