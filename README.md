@@ -4,7 +4,7 @@
   <a href="https://discord.gg/QkXfPjNGPk"><img src="https://dcbadge.limes.pink/api/server/QkXfPjNGPk" alt="Discord Server"></a>
 </h1>
 
-# Patchsu is self-compile osu!lazer with local-first priority client that has extra optional features
+# Patchsu is self-compile, local-first priority osu!lazer client that has extra optional features, inspired by McOsu.
 
 ### If you just stumbled upon this repository and don't know what osu!lazer or osu! is -> go and play official client instead of this at https://osu.ppy.sh/ !!!
 
