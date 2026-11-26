@@ -42,7 +42,8 @@ var ErrNoRelease = errors.New("no patch release has been published yet at github
 type Source struct {
 	Manifest *manifest.Manifest
 	Tag      string
-	// Origin says where it came from: "builtin", "github", "cache" or "local".
+	// Origin says where it came from: "builtin", "branch" (the repo's main branch), "github" (a patch release),
+	// "cache" or "local".
 	Origin string
 	// Dir holds the .patch files once they're available (always set for "local" and "cache";
 	// for "builtin" after Ensure has unpacked them).
@@ -55,6 +56,7 @@ type Source struct {
 
 	patchesURL  string
 	patchesSize int64
+	files       map[string]branchFile // "branch" patches not downloaded yet
 }
 
 // Describe is a short line for the header, e.g. "release v26" or "local folder".
@@ -64,7 +66,12 @@ func (s *Source) Describe() string {
 		return "built-in patches"
 	case "local":
 		return "local patches"
+	case "branch":
+		return "GitHub patches (" + Branch + "@" + strings.TrimPrefix(s.Tag, branchTag)[:7] + ")"
 	case "cache":
+		if isBranchTag(s.Tag) {
+			return "GitHub patches (" + Branch + "@" + strings.TrimPrefix(s.Tag, branchTag)[:7] + ", offline, cached)"
+		}
 		return "release " + s.Tag + " (offline, cached)"
 	}
 	return "release " + s.Tag
@@ -78,8 +85,9 @@ func (s *Source) PatchPath(id string) string {
 // NeedsDownload reports whether Ensure will download patches.zip.
 func (s *Source) NeedsDownload() bool { return s.Dir == "" && s.builtin == nil }
 
-// Open picks the patch source: a local folder (local), else the GitHub release tag ("latest" = the newest),
-// else the patches built into the CLI, else the newest GitHub release. cacheDir may be "".
+// Open picks the patch source: a local folder (local), else the GitHub release tag ("latest" = the newest,
+// "main" = the patches on the repo's main branch), else the patches built into the CLI, else the newest GitHub
+// release (or the main branch's patches when there's no release). cacheDir may be "".
 func Open(ctx context.Context, local, tag string, builtin fs.FS, cacheDir string) (*Source, error) {
 	switch {
 	case local != "":
@@ -88,6 +96,15 @@ func Open(ctx context.Context, local, tag string, builtin fs.FS, cacheDir string
 		return FromFS(builtin)
 	case tag == "latest":
 		tag = ""
+	case tag == Branch:
+		s, err := findBranch(ctx, cacheDir, time.Time{})
+		if err == nil {
+			return s, nil
+		}
+		if cached, cerr := findCachedBranch(cacheDir); cerr == nil {
+			return cached, nil
+		}
+		return nil, fmt.Errorf("couldn't get the patches from github.com/%s (%v) and none are cached yet", Repo, err)
 	}
 	return Find(ctx, tag, cacheDir)
 }
@@ -125,13 +142,24 @@ func FromFS(fsys fs.FS) (*Source, error) {
 // UpdateTimeout is how long the update check may take; offline, the built-in patches are used after it.
 const UpdateTimeout = 8 * time.Second
 
-// Update looks for a GitHub patch release that replaces the built-in patches b: the newest release, if it was
-// published after the patches were bundled and its patches differ. It returns nil when there's none, when GitHub
-// can't be reached (the built-in patches are fine offline), or when the release needs a newer CLI than cliVersion;
-// notice then says so.
+// Update looks for GitHub patches that replace the built-in patches b: first the patches on the repo's main branch,
+// if they were changed after b was bundled and differ from it; when the branch can't be read, the newest patch
+// release under the same rule. It returns nil when there's none, when GitHub can't be reached (the built-in patches
+// are fine offline), or when the newer patches need a newer CLI than cliVersion; notice then says so.
 func Update(ctx context.Context, b *Source, cacheDir, cliVersion string) (up *Source, notice string) {
 	if b == nil || b.Origin != "builtin" {
 		return nil, ""
+	}
+	if br, err := findBranch(ctx, cacheDir, b.Bundled); err == nil {
+		if br == nil || sameAsBuiltin(br, b) {
+			return nil, ""
+		}
+		if err := br.Manifest.CheckCLI(cliVersion); err != nil {
+			return nil, "The patches on github.com/" + Repo + " changed, but they need a newer Patchsu-CLI (github.com/" +
+				Repo + "/releases). Using the patches built into this one."
+		}
+		return br, "Updated: using the patches from github.com/" + Repo + " (changed " +
+			br.Published.Local().Format("2006-01-02 15:04") + "), newer than the ones built into this Patchsu-CLI."
 	}
 	gh, err := findOnline(ctx, "", cacheDir)
 	if err != nil || !gh.Published.After(b.Bundled) || samePatches(gh.Manifest, b.Manifest) {
@@ -307,6 +335,11 @@ var apiHeaders = map[string]string{"Accept": "application/vnd.github+json", "X-G
 // cacheDir may be "" when no data folder is chosen yet.
 func Find(ctx context.Context, tag, cacheDir string) (*Source, error) {
 	src, err := findOnline(ctx, tag, cacheDir)
+	if errors.Is(err, ErrNoRelease) && tag == "" {
+		if br, berr := findBranch(ctx, cacheDir, time.Time{}); berr == nil {
+			return br, nil
+		}
+	}
 	if err == nil || errors.Is(err, ErrNoRelease) {
 		return src, err
 	}
@@ -382,12 +415,25 @@ func loadCached(dir string) (*Source, error) {
 	return s, s.verify()
 }
 
+// findCachedBranch returns the newest cached main-branch patches.
+func findCachedBranch(cacheDir string) (*Source, error) {
+	return findCachedMatching(cacheDir, isBranchTag)
+}
+
 func findCached(tag, cacheDir string) (*Source, error) {
 	if cacheDir == "" {
 		return nil, os.ErrNotExist
 	}
 	if tag != "" {
 		return loadCached(filepath.Join(cacheDir, tag))
+	}
+	return findCachedMatching(cacheDir, func(string) bool { return true })
+}
+
+// findCachedMatching returns the most recently cached release whose tag passes keep.
+func findCachedMatching(cacheDir string, keep func(tag string) bool) (*Source, error) {
+	if cacheDir == "" {
+		return nil, os.ErrNotExist
 	}
 	entries, err := os.ReadDir(cacheDir)
 	if err != nil {
@@ -399,7 +445,7 @@ func findCached(tag, cacheDir string) (*Source, error) {
 	}
 	var cands []cand
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || !keep(e.Name()) {
 			continue
 		}
 		s, err := loadCached(filepath.Join(cacheDir, e.Name()))
@@ -423,6 +469,9 @@ func (s *Source) Ensure(ctx context.Context, cacheDir string, progress download.
 	}
 	if s.builtin != nil {
 		return s.unpack(cacheDir)
+	}
+	if s.files != nil {
+		return s.ensureBranch(ctx, cacheDir, progress)
 	}
 	dir := filepath.Join(cacheDir, s.Tag)
 	if err := os.RemoveAll(dir); err != nil {

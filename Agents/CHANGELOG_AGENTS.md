@@ -1,5 +1,19 @@
 Changelog go in patch numerical order, so 0001 will be first and 1000 will be last unless its a breaking change.
 
+## 2026-11-26 · Patchsu-CLI uses the patches on GitHub's main branch when they're newer
+
+- **Patchsu-CLI** On start, it now checks `Patchsu/patches` on the repo's `main` branch (`internal/release/branch.go`). If the last
+  commit that changed it is newer than the built-in patches (`bundled-at`) and the files differ, those patches are used
+  (header: `GitHub patches (main@<sha>)`) and downloaded into `<data>/releases/main-<sha12>/`. Before, only GitHub *patch
+  releases* (`manifest.json` + `patches.zip`) were checked, and none are published, so it always said "built-in patches".
+  Requests: the commit Atom feed (no API quota); the contents API only for a new, newer commit; if the API refuses (60/h
+  unauthenticated limit), it downloads the raw files and compares them itself. Patch releases are still checked when the branch
+  can't be read. `--release main` picks the branch patches (cached copy when offline); with no built-in patches and no patch
+  release, the branch is used. `--no-update` still keeps the built-in ones.
+- Checked: `go test ./internal/release` (new `TestUpdateBranch` with a fake GitHub), live run against GitHub (14 patches, identical
+  to `Patchsu/patches`, second start from cache). `TestDisableRemovesDependents` (manifest) and `TestPickerFlow` (tui) already
+  fail on HEAD without this change.
+
 ## 2026-11-26 · 0002 Total Play Time format, fetched osu! plays count
 
 - **0002** Total Play Time is formatted like the website / lazer's `TotalPlayTime`: `5h 12m`, with whole days in front from

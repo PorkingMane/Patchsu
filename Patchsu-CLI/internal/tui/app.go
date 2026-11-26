@@ -36,7 +36,7 @@ type Options struct {
 	DataDir    string // --data-dir
 	Prefix     string // --prefix
 	NoLauncher bool   // --no-launcher
-	NoUpdate   bool   // --no-update: don't look for a newer patch release than the built-in one
+	NoUpdate   bool   // --no-update: don't look for newer patches on GitHub than the built-in ones
 }
 
 type screen int

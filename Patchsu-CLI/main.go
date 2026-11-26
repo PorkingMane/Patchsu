@@ -51,9 +51,10 @@ Flags:
   --server NAME      build: the custom server for the "Custom server" preset; the game is built as Patchsu-NAME
                      uninstall: remove Patchsu-NAME instead of Patchsu
   --yes              build: approve downloads without asking
-  --release TAG      use this patch release from GitHub instead of the built-in patches ("latest": the newest)
-  --no-update        use the built-in patches even when GitHub has a newer patch release (normally the newer
-                     release is used, so you don't have to download a new Patchsu-CLI for patch updates)
+  --release TAG      use this patch release from GitHub instead of the built-in patches ("latest": the newest,
+                     "main": the patches on the repo's main branch)
+  --no-update        use the built-in patches even when the patches on GitHub changed after this CLI was built
+                     (normally the newer ones are used, so you don't need a new Patchsu-CLI for patch updates)
   --local DIR        use a local patches folder (manifest.json or patches.meta.json)
   --data-dir DIR     where downloads and build files go (default: remembered choice)
   --prefix DIR       install into exactly this folder (the .app on macOS). Without it, the game goes where the
@@ -184,8 +185,8 @@ func dataDir(f *flags, info *sysinfo.Info, cfg *config.Config) string {
 	return filepath.Join(info.DocumentsDir(), paths.DataDirName)
 }
 
-// loadSource: --local, else --release from GitHub, else the built-in patches (or a newer GitHub patch release, unless
-// --no-update), else the newest GitHub release.
+// loadSource: --local, else --release from GitHub, else the built-in patches (or newer patches from the repo's main
+// branch or a patch release, unless --no-update), else the newest GitHub release.
 func loadSource(f *flags, cacheDir string) (*release.Source, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()

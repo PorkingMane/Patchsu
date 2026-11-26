@@ -94,9 +94,10 @@ func TestUpdate(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	old := releasesURL
-	releasesURL = srv.URL + "/releases"
-	defer func() { releasesURL = old }()
+	old, oldAPI, oldFeed := releasesURL, apiURL, feedURL
+	// The branch can't be read: releases are used.
+	releasesURL, apiURL, feedURL = srv.URL+"/releases", srv.URL+"/no-branch", srv.URL+"/no-feed"
+	defer func() { releasesURL, apiURL, feedURL = old, oldAPI, oldFeed }()
 
 	ctx := context.Background()
 	same := b.Manifest.Patches[0].SHA256
@@ -120,8 +121,138 @@ func TestUpdate(t *testing.T) {
 	}
 
 	// Offline: no update, no notice.
-	releasesURL = "http://127.0.0.1:1/releases"
+	releasesURL, apiURL, feedURL = "http://127.0.0.1:1/releases", "http://127.0.0.1:1", "http://127.0.0.1:1"
 	if up, notice := Update(ctx, b, "", "0.1.0"); up != nil || notice != "" {
 		t.Errorf("offline: %v %q", up, notice)
+	}
+}
+
+// TestUpdateBranch: patches changed on the main branch after the CLI was built replace the built-in ones, are
+// downloaded and checked by Ensure, and are used from the cache next time.
+func TestUpdateBranch(t *testing.T) {
+	meta := `{"osuCommit":"abc","patches":[{"id":"0001","file":"0001-a.patch","required":true}],"presets":[{"name":"All","patches":"*"}]}`
+	builtin := fstest.MapFS{
+		MetaFile:       {Data: []byte(meta)},
+		"0001-a.patch": {Data: []byte("one\n")},
+		BundledAtFile:  {Data: []byte("2026-11-20T10:00:00Z\n")},
+	}
+	b, err := FromFS(builtin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var date, patch string
+	commit := strings.Repeat("c", 40)
+	feed, apiLimited := true, false
+	listed := 0 // file listings asked for
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if apiLimited && strings.HasPrefix(r.URL.Path, "/api/") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		switch r.URL.Path {
+		case "/feed":
+			if !feed {
+				http.NotFound(w, r)
+				return
+			}
+			fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><id>x</id><updated>%[2]s</updated>
+<entry><id>tag:github.com,2008:Grit::Commit/%[1]s</id><updated>%[2]s</updated></entry>
+<entry><id>tag:github.com,2008:Grit::Commit/%[3]s</id><updated>2020-01-01T00:00:00Z</updated></entry></feed>`, commit, date, strings.Repeat("0", 40))
+		case "/api/commits":
+			fmt.Fprintf(w, `[{"sha":%q,"commit":{"committer":{"date":%q}}}]`, commit, date)
+		case "/api/contents/" + PatchesPath:
+			listed++
+			fmt.Fprintf(w, `[{"name":%q,"sha":%q,"size":%d,"type":"file"},{"name":"0001-a.patch","sha":%q,"size":%d,"type":"file"}]`,
+				MetaFile, gitBlob([]byte(meta)), len(meta), gitBlob([]byte(patch)), len(patch))
+		case "/raw/" + commit + "/" + PatchesPath + "/" + MetaFile:
+			fmt.Fprint(w, meta)
+		case "/raw/" + commit + "/" + PatchesPath + "/0001-a.patch":
+			fmt.Fprint(w, patch)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	oldAPI, oldRaw, oldRel := apiURL, rawURL, releasesURL
+	oldFeed := feedURL
+	apiURL, rawURL, releasesURL, feedURL = srv.URL+"/api", srv.URL+"/raw", srv.URL+"/releases", srv.URL+"/feed"
+	defer func() { apiURL, rawURL, releasesURL, feedURL = oldAPI, oldRaw, oldRel, oldFeed }()
+
+	ctx := context.Background()
+	for _, c := range []struct {
+		name, date, patch string
+		update            bool
+	}{
+		{"newer, same patches", "2026-11-25T00:00:00Z", "one\n", false},
+		{"older, changed", "2026-11-19T00:00:00Z", "two\n", false},
+	} {
+		date, patch = c.date, c.patch
+		if up, notice := Update(ctx, b, t.TempDir(), "0.1.0"); (up != nil) != c.update {
+			t.Errorf("%s: update %v, notice %q", c.name, up != nil, notice)
+		}
+	}
+	if listed != 1 {
+		t.Errorf("the files were listed %d times; an older commit shouldn't be listed at all", listed)
+	}
+
+	date, patch = "2026-11-25T00:00:00Z", "two\n"
+	cache := t.TempDir()
+	up, notice := Update(ctx, b, cache, "0.1.0")
+	if up == nil || up.Origin != "branch" || !up.NeedsDownload() || !strings.Contains(notice, "Updated") ||
+		up.Describe() != "GitHub patches (main@ccccccc)" {
+		t.Fatalf("newer, changed: %+v, %q", up, notice)
+	}
+	if err := up.Ensure(ctx, cache, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(up.PatchPath("0001")); string(got) != "two\n" {
+		t.Fatalf("downloaded patch: %q", got)
+	}
+	// Next start: from the cache, no download.
+	again, _ := Update(ctx, b, cache, "0.1.0")
+	if again == nil || again.Origin != "branch" || again.NeedsDownload() {
+		t.Fatalf("cached: %+v", again)
+	}
+
+	// A file that doesn't match GitHub's checksum is refused.
+	patch = "three\n"
+	commit = strings.Repeat("d", 40)
+	up, _ = Update(ctx, b, cache, "0.1.0")
+	if up == nil {
+		t.Fatal("no update for the second commit")
+	}
+	patch = "tampered\n"
+	if err := up.Ensure(ctx, cache, nil); err == nil {
+		t.Fatal("a patch with the wrong checksum was accepted")
+	}
+
+	// No feed and the API at its hourly limit: the raw files are downloaded and compared instead.
+	feed, apiLimited = false, true
+	if up, _ := Update(ctx, b, t.TempDir(), "0.1.0"); up != nil {
+		t.Fatal("API limited, no feed: GitHub can't be read, but an update was found")
+	}
+	feed, patch = true, "four\n"
+	commit = strings.Repeat("e", 40)
+	up, _ = Update(ctx, b, "", "0.1.0")
+	if up == nil || up.NeedsDownload() && up.DownloadSize() != 0 {
+		t.Fatalf("API limited: %+v", up)
+	}
+	if err := up.Ensure(ctx, cache, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(up.PatchPath("0001")); string(got) != "four\n" {
+		t.Fatalf("raw patch: %q", got)
+	}
+	patch = "one\n"
+	commit = strings.Repeat("f", 40)
+	if up, _ := Update(ctx, b, t.TempDir(), "0.1.0"); up != nil {
+		t.Fatal("API limited: same patches as built in, but an update was found")
+	}
+
+	// Offline: the cached branch patches are found for --release main.
+	apiURL, feedURL = "http://127.0.0.1:1", "http://127.0.0.1:1"
+	s, err := Open(ctx, "", Branch, nil, cache)
+	if err != nil || s.Origin != "cache" || !strings.Contains(s.Describe(), "offline") {
+		t.Fatalf("offline --release main: %+v %v", s, err)
 	}
 }
