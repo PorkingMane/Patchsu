@@ -4,7 +4,7 @@ Most of this repository is written with AI agents and I easily accept AI things,
 
 ## AI agents
 
-Point your agent at [AGENTS.md](Agents/AGENTS.md), it lists the performance issues I've come across, what every [patch](Agents/PATCHES_AGENTS.md) does in detail and how to [contribute](Agents/CONTRIBUTING_AGENTS.md) if you are an AI agent.
+Point your agent at [AGENTS.md](AGENTS.md), it gives them everything they need to know, what every [patch](Agents/PATCHES_AGENTS.md) does in detail and how to [contribute](Agents/CONTRIBUTING_AGENTS.md) if you are an AI agent.
 
 **Without 0001 nothing should build.** Every patch builds on the online restrictions. Pull requests that remove them, add write requests to the allow-list or submit anything to osu! servers won't be merged. Patches that connect to *other* servers (Akatsuki, Torii, etc.) are fine, as their own patch.
 

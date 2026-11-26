@@ -1,5 +1,7 @@
 Changelog go in patch numerical order, so 0001 will be first and 1000 will be last unless its a breaking change.
 
+## V1.1 Release
+
 #### 26 November · 5 changes
 - **BREAKING**. Patchsu changed patch numbering/naming:
   - 0001–0499 reserved for custom patches
@@ -28,6 +30,8 @@ Changelog go in patch numerical order, so 0001 will be first and 1000 will be la
 - **Patchsu old folder rename**. The `osu-local` folder is renamed to `patchsu-osu` on the first start. Your old settings are moved over by themselves (from game.ini, profiles.json and patch12.json) and removed from the old places. (0001/0002/0003/0007/0008/0009)
 - `LOCAL map PP`, `Profiles with mod rules` and `Gray out scores that do not go towards PP` are now ON by default (0002)
 - New Feature. **Search scores by their set date**. You can now search scores by when they were set via `scoredate`,`datescore`,`playdate`. For example `playdate<=180d` will search for scores that are set within 180 days from now and show you those beatmaps. `<` `>` and `=` works as filters, as well as days `<30d`, weeks `>4w`, months `=1m` and years `<2y`. Example use case - whenever you import scores from Bancho to local profile you can filter out by date and remember your old maps without going through profile. (0003b)
+
+## V1.0 Release
 
 #### 25 November · ~50 changes
 - **New Feature**. Speedrun profiles ("⋮" next to "+", named "SP Profile"). Set a PP or estimated-rank goal `1000 / #10000`, auto calculates rank from PP and vice versa. A timer counts while the profile is active and stops, blue, with a "DONE!" notification when the goal is reached. "Reset SD/PF/SP profile count" now resets SP numbering too. (0002)

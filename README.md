@@ -124,15 +124,15 @@ All things documented here already can be compiled via provided .sh / .cmd files
 </details>
 
 # Documentation
-[GUIDE.md](GUIDE.md) - if you want to build stuff yourself instead of my CLI tool and some caveats about it. AI written
+[GUIDE.md](GUIDE.md) - if you want to build stuff yourself instead of my CLI tool
 
-[PATCHES.md](PATCHES.md) - every patch, what it needs and what it does.
+[PATCHES.md](PATCHES.md) - every patch, what it needs and what it does
 
-[CONTRIBUTING.md](CONTRIBUTING.md)
+[CONTRIBUTING.md](CONTRIBUTING.md) 
 
-[CHANGELOG.md](CHANGELOG.md) - AI compiled for now
+[CHANGELOG.md](CHANGELOG.md) - Go by release numbers now
 
-[AGENTS.md](Agents/AGENTS.md) - if you let an AI agent update/do anything, point it here
+[AGENTS.md](AGENTS.md) - if you let an AI agent update/do anything, point it here
 
 # License
 This patch files use the MIT license, which matches the license of the upstream client (osu!lazer).
