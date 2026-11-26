@@ -37,11 +37,12 @@ Or join discord on top of this README!!!
 
 Those are .patch files for osu!lazer open-sourced (that will stay that way, hopefully) client that you need to compile yourself on your end via provided .sh/.cmd files in release tab or downloading entire repository yourself and opening said .sh/.cmd files. You can mix and match those patches any way you want to create personal experience or to add things to the game you always wanted, but are too far along on ppy team roadmap. Right now most of the features are aimed on a local-based play because of personal reasons, but this will expand in the future (hopefully), as well as you can submit your own patches on top of what already provided in the repo via Pull Requests, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-### My incentive to do another 'github repo slop' when there is infinite amount of other clients
+<details> <summary> My incentive to do another 'github repo slop' when there is infinite amount of other clients </summary>
 Everyone is making a their own fork of the client/server to implement features that they want, which on itself is a good thing, because people are trying stuff out, but having so many of the same 'private servers' or 'forks' that do mostly the same thing is kinda boring and repetitive, especially in the age of AI when you can iterate features faster than ever. I don't want for lazer to go close-sourced (as a possible consideration was stated in [this](https://youtu.be/hxz6ieZx_jQ) osu!update video), because experimenting and people trying stuff they want is the utmost priority to keep community healthy, no matter if the things are done with AI or not.
 
 Instead, I'd love to actually experiment on my own and .patch stuff on top of base osu!lazer if that fulfills both osu!team (to pace at their own, implementing carefully crafted features without any AI) and community/mine (fuck around and do cool stuff that are fun to play with / can help people get better mentally or skill-wise) desires.
 I think its a fair game as long as people don't annoy each other and act reasonable... Also I hate stable (stable is almost the same age as me bruh), McOsu is really old as well, and many clients do not update/keep up with lazer rather going their own path, so idea of .patch files that can be split up and built differently feels a lot better to me than dividing the community into many forks that serve different purposes (I'm aware that this repo will only contribute to this problem with 99% certainty either way, but I'll try to maintain it as long as possible).
+</details>
 
 ## Patch logic
 Every patch is dependent on 0001-Offline-Fix because NO WAY we should send any updates to your actual osu!profile, even if there is in-game protection from this, especially with how many patches there are. If you modifying the patches and removing this line, or you asking AI agent to do so - its on you, and I would HIGHLY advise not to.
@@ -57,7 +58,7 @@ Patchsu uses the official osu! data folder (`~/.local/share/osu`, `%APPDATA%\osu
 ### Most notable things implemented
 All things documented here already can be compiled via provided .sh / .cmd files (or CLI tool in release tab) and are heavily tested.
 
-<details open> <summary> 1. Disabling almost* every connection and multiplayer feature from client. </summary>
+<details> <summary> 1. Disabling almost* every connection and multiplayer feature from client. </summary>
   
   - *Beatmap downloading/updating and discovering works
   - *Beatmap metadata updating on launch works
@@ -87,41 +88,22 @@ All things documented here already can be compiled via provided .sh / .cmd files
   - Exporting top 50 / every score recorded on local profile
 </details>
 
-<details> <summary> 5. Few interface adjustments that stays true to osu!lazer UI</summary>
-
-  - Reversed sorting
-  - PP sorting
-  - Right-clicking / Dragging on Star Rating bar will move the furthest end to your cursor (mirroring how LMB works)
-  - Wheel clicking resets Star Rating bar
-  - Wheel clicking on 'Now Playing' mutes music
-  - Removed 'Play' and 'Clear all local scores' from Options/F3 (The one on the bottom bar) menu.
-  - Holding Shift whenever there is a text in search box allows you to move it by 1 symbol.
+<details> <summary> 3. Togglable mods in replays</summary>
+    
+  - Half-Time / Daycore
+  - Double Time / Nightcore
+  - Hidden / Traceable
+  - Flashlight / Blinds
+  - Wind Up / Down
+  - Grow / Deflate
+  - Muted
+  - No Scope / Bloom
   
 </details>
 
-<details> <summary> 7. Togglable mods in replays</summary>
-  
-  - **Vanilla osu!lazer**
-    - Half-Time / Daycore
-    - Double Time / Nightcore
-    - Hidden / Traceable
-    - Flashlight / Blinds
-    - Wind Up / Down
-    - Grow / Deflate
-    - Muted
-    - No Scope
-</details>
-**Ritsu/Torii/McOsu mods** has this functionality built-in their respective patches
+4. Full in osu!lazer UI (result screen) PP simulation. See [screenshots](screenshots/) folder for preview
 
-
-8. Full in osu!lazer UI (result screen) PP simulation. See [screenshots](screenshots/) folder for preview
-
-<details> <summary> 9. McOsu mods</summary>
-
-- **Mafham** ported to lazer in a usable, optimised state, with an option to disable it in replay so you can see exactly where you've missed AND with culled object brightness slider (if you don't want to learn the map, but still play Mafham for fun. Check [screenshots](screenshots/) for preview)
-- **Jigsaw 1**, that is now called 'Click Control'. Any unnecessary clicks count as misses and can go past object count.
-
-</details>
+5. **Mafham** ported to lazer in a usable, optimised state, with an option to disable it in replay so you can see exactly where you've missed AND with culled object brightness slider (if you don't want to learn the map, but still play Mafham for fun. Check [screenshots](screenshots/) for preview)
 
 # Documentation
 [GUIDE.md](GUIDE.md) - if you want to build stuff yourself instead of my CLI tool

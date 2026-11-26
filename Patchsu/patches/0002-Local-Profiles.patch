@@ -54,6 +54,11 @@ Patchsu patch 2 of 2: local profiles (apply after 0001).
   (a score only links to its beatmap while it matches); plays fetched before that was set are repaired on startup
   (LocalProfileManager.repairScoresWithoutBeatmapHash). Needs "Online lookups on local profiles": while it's off the button is
   greyed out but still clickable and leads to that setting. Also needs the online account signed in.
+  Fetched plays count towards play count, hits and play time like synced plays (one play each, the map's length / rate as time):
+  LocalProfile.BanchoScores lists the ones without a replay; ones fetched by older builds are marked once on startup
+  (LocalProfileManager.migrateBanchoScores, profiles.json Version 2).
+- Total Play Time is shown like the website / lazer: "5h 12m", "3d 4h 12m" from 24 hours on; the tooltip shows the total in hours
+  (rounded), or in minutes under 2 hours.
 - Settings -> Patchsu "Remove every play dated before the year 2000" (asks first): deletes local profiles' scores with broken dates
   (e.g. 1 January 0001) and forgets plays recorded on such days. Play History ignores such dates either way.
 - Beatmaps whose difficulty can't be calculated are reported once (one notification) and never calculated again (no error popups);
@@ -2962,10 +2967,10 @@ index 0000000000..887ff0d388
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileManager.BanchoImport.cs b/osu.Game/LocalPriority/LocalProfileManager.BanchoImport.cs
 new file mode 100644
-index 0000000000..9ac3e9d300
+index 0000000000..ec273665ab
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileManager.BanchoImport.cs
-@@ -0,0 +1,887 @@
+@@ -0,0 +1,939 @@
 +using System;
 +using System.Collections.Generic;
 +using System.Linq;
@@ -3444,6 +3449,7 @@ index 0000000000..9ac3e9d300
 +
 +            var rulesetInstance = run.RulesetInstance ??= run.Ruleset.CreateInstance();
 +            var profile = run.Profile;
++            var added = new List<Guid>();
 +
 +            realm.Write(r =>
 +            {
@@ -3520,9 +3526,12 @@ index 0000000000..9ac3e9d300
 +                    existing[(beatmapId, seconds)] = score.ID;
 +                    run.Scores[play] = score.ID;
 +                    run.Added++;
++                    added.Add(score.ID);
 +                }
 +            });
 +
++            // Never recorded as attempts: each counts as one play from its score (play count, hits, play time), like synced plays.
++            Store.UpdateBanchoScores(profile.Id, added);
 +            refreshScoreDisplays();
 +        }
 +
@@ -3556,6 +3565,50 @@ index 0000000000..9ac3e9d300
 +
 +            Logger.Log($@"Patchsu: gave {repaired} local profile score(s) their beatmap's hash.");
 +            refreshScoreDisplays();
++        }
++
++        /// <summary>
++        /// Plays fetched by earlier versions without a replay counted no play, hits or play time (only the ones whose replay was
++        /// downloaded did, as synced plays). Marks them once, like newly fetched ones. They are the local profiles' scores that
++        /// have no replay file and no online ID: plays set here always save a replay. Called once the manager is loaded.
++        /// </summary>
++        private void migrateBanchoScores()
++        {
++            if (!Store.TakeMigration(2))
++                return;
++
++            var profiles = Store.GetProfiles();
++            var byUserId = profiles.ToDictionary(p => p.UserId, p => p.Id);
++            var found = new Dictionary<Guid, List<Guid>>();
++
++            realm.Run(r =>
++            {
++                foreach (var s in r.All<ScoreInfo>().Filter($@"{nameof(ScoreInfo.DeletePending)} == false AND {nameof(ScoreInfo.OnlineID)} <= 0 AND {nameof(ScoreInfo.Files)}.@count == 0"))
++                {
++                    if (!byUserId.TryGetValue(s.RealmUser.OnlineID, out var profileId))
++                        continue;
++
++                    if (!found.TryGetValue(profileId, out var list))
++                        found[profileId] = list = new List<Guid>();
++
++                    list.Add(s.ID);
++                }
++            });
++
++            foreach (var profile in profiles)
++            {
++                if (!found.TryGetValue(profile.Id, out var ids))
++                    continue;
++
++                var synced = profile.SyncedScores.Select(s => s.ScoreId).ToHashSet();
++                ids.RemoveAll(synced.Contains);
++
++                if (ids.Count == 0)
++                    continue;
++
++                Store.UpdateBanchoScores(profile.Id, ids);
++                Logger.Log($@"Patchsu: {ids.Count} play(s) fetched from osu! now count towards ""{profile.Name}""'s play count and play time.");
++            }
 +        }
 +
 +        /// <summary>
@@ -3740,7 +3793,11 @@ index 0000000000..9ac3e9d300
 +                Store.AddSyncedScores(profile.Id, new[] { synced });
 +
 +            if (attached)
++            {
++                // The replay's score counts the play now (as a synced play), not the play it replaced.
++                Store.UpdateBanchoScores(profile.Id, Array.Empty<Guid>(), new[] { placeholderId });
 +                refreshScoreDisplays();
++            }
 +
 +            return attached;
 +        }
@@ -4229,10 +4286,10 @@ index 0000000000..403c55e2bb
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileManager.cs b/osu.Game/LocalPriority/LocalProfileManager.cs
 new file mode 100644
-index 0000000000..5f8445a495
+index 0000000000..44a34b7436
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileManager.cs
-@@ -0,0 +1,1943 @@
+@@ -0,0 +1,1944 @@
 +using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -4468,6 +4525,7 @@ index 0000000000..5f8445a495
 +            base.LoadComplete();
 +
 +            repairScoresWithoutBeatmapHash();
++            migrateBanchoScores();
 +
 +            // Any change to scores (saved, deleted, transferred, imported) can change PP.
 +            scoreSubscription = realm.RegisterForNotifications(r => r.All<ScoreInfo>(), (_, changes) =>
@@ -7477,10 +7535,10 @@ index 0000000000..80249a74d9
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileOverlay.cs b/osu.Game/LocalPriority/LocalProfileOverlay.cs
 new file mode 100644
-index 0000000000..66ba6fb983
+index 0000000000..090f4efcdf
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileOverlay.cs
-@@ -0,0 +1,4198 @@
+@@ -0,0 +1,4223 @@
 +using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -10385,7 +10443,7 @@ index 0000000000..66ba6fb983
 +                                                                // Like the website's "Medals / pp / Total Play Time" row (right-click pp for the ranking options).
 +                                                                new PerformanceValue(profile, manager,
 +                                                                    value(@"pp", stats == null ? @"…" : $@"{stats.PP:N0}", performanceTooltip())),
-+                                                                value(@"Total Play Time", $@"{(int)time.TotalHours:N0}h {time.Minutes}m"),
++                                                                value(@"Total Play Time", playTime(time), playTimeTooltip(time)),
 +                                                                // Judgement titles in their judgement's colour, like the numbers on the score rows.
 +                                                                judgement(@"300", mania ? plays.Count(HitResult.Perfect) + plays.Count(HitResult.Great) : plays.Count(HitResult.Great),
 +                                                                    osuColour.ForHitResult(HitResult.Great)),
@@ -10440,6 +10498,31 @@ index 0000000000..66ba6fb983
 +
 +                foreach (var (placeholder, badge) in gradeBadges)
 +                    liveLayer.Track(placeholder, badge);
++            }
++
++            /// <summary>
++            /// Like the website's and lazer's profile: "5h 12m", with whole days in front from 24 hours on ("3d 4h 12m").
++            /// </summary>
++            private static string playTime(TimeSpan time)
++            {
++                long totalMinutes = (long)Math.Floor(time.TotalMinutes);
++                long days = totalMinutes / (24 * 60);
++                string value = $@"{totalMinutes / 60 % 24}h {totalMinutes % 60}m";
++                return days > 0 ? $@"{days:N0}d {value}" : value;
++            }
++
++            /// <summary>
++            /// Like the website's and lazer's profile: the total in hours (rounded), or in minutes while that's under 2 hours.
++            /// </summary>
++            private static string playTimeTooltip(TimeSpan time)
++            {
++                long hours = (long)Math.Round(time.TotalHours);
++
++                if (hours >= 2)
++                    return $@"{hours:N0} hours";
++
++                long minutes = (long)Math.Floor(time.TotalMinutes);
++                return minutes == 1 ? @"1 minute" : $@"{minutes:N0} minutes";
 +            }
 +
 +            private string performanceTooltip()
@@ -11724,10 +11807,10 @@ index 0000000000..cfabcfaa0d
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileStatistics.cs b/osu.Game/LocalPriority/LocalProfileStatistics.cs
 new file mode 100644
-index 0000000000..1cdbe44c6d
+index 0000000000..f612766545
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileStatistics.cs
-@@ -0,0 +1,860 @@
+@@ -0,0 +1,861 @@
 +using System;
 +using System.Collections.Generic;
 +using System.Linq;
@@ -12081,7 +12164,8 @@ index 0000000000..1cdbe44c6d
 +                arguments.Add(owner.Username);
 +            }
 +
-+            var syncedIds = profile.SyncedScores.Select(s => s.ScoreId).ToHashSet();
++            // Plays counted from their score rather than recorded as attempts: synced ones and ones fetched from osu! without a replay.
++            var syncedIds = profile.SyncedScores.Select(s => s.ScoreId).Concat(profile.BanchoScores).ToHashSet();
 +            var options = store.Options;
 +            var exclusions = store.PerformanceExclusions.CreateMatcher();
 +            var modFacts = new ModFactsCache(ruleset);
@@ -12590,10 +12674,10 @@ index 0000000000..1cdbe44c6d
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileStore.cs b/osu.Game/LocalPriority/LocalProfileStore.cs
 new file mode 100644
-index 0000000000..231e96014a
+index 0000000000..fc456cd6a6
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileStore.cs
-@@ -0,0 +1,1623 @@
+@@ -0,0 +1,1680 @@
 +using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -13196,6 +13280,55 @@ index 0000000000..231e96014a
 +        }
 +
 +        /// <summary>
++        /// Remembers plays fetched from osu! without a replay (see <see cref="LocalProfile.BanchoScores"/>), and forgets
++        /// <paramref name="forget"/> (plays whose replay took their place).
++        /// </summary>
++        public void UpdateBanchoScores(Guid id, IEnumerable<Guid> add, IEnumerable<Guid>? forget = null)
++        {
++            lock (sync)
++            {
++                var profile = data.Profiles.FirstOrDefault(p => p.Id == id);
++                if (profile == null)
++                    return;
++
++                var scores = profile.BanchoScores.ToHashSet();
++                int countBefore = scores.Count;
++                bool changed = false;
++
++                foreach (var score in add)
++                    changed |= scores.Add(score);
++
++                if (forget != null)
++                    scores.ExceptWith(forget);
++
++                if (!changed && scores.Count == countBefore)
++                    return;
++
++                // Replaced, never changed in place: profile copies handed out by the store share the list.
++                profile.BanchoScores = scores.ToList();
++                save();
++            }
++
++            Changed?.Invoke();
++        }
++
++        /// <summary>
++        /// One-time updates of saved data: true (once) if the profiles were saved by a build older than <paramref name="version"/>.
++        /// </summary>
++        public bool TakeMigration(int version)
++        {
++            lock (sync)
++            {
++                if (data.Version >= version)
++                    return false;
++
++                data.Version = version;
++                save();
++                return true;
++            }
++        }
++
++        /// <summary>
 +        /// Returns (and forgets) the profile's synced scores, to give them back to their original players.
 +        /// </summary>
 +        public IReadOnlyList<SyncedScore> TakeSyncedScores(Guid id)
@@ -13513,9 +13646,10 @@ index 0000000000..231e96014a
 +
 +                if (source != null)
 +                {
-+                    int countBefore = source.SyncedScores.Count;
++                    int countBefore = source.SyncedScores.Count + source.BanchoScores.Count;
 +                    source.SyncedScores = source.SyncedScores.Where(s => s.ScoreId != scoreId).ToList();
-+                    int removedSynced = countBefore - source.SyncedScores.Count;
++                    source.BanchoScores = source.BanchoScores.Where(s => s != scoreId).ToList();
++                    int removedSynced = countBefore - source.SyncedScores.Count - source.BanchoScores.Count;
 +
 +                    if (removedSynced == 0 && source.Stats.TryGetValue(ruleset, out var sourceStats))
 +                    {
@@ -13873,6 +14007,12 @@ index 0000000000..231e96014a
 +        public List<SyncedScore> SyncedScores { get; set; } = new List<SyncedScore>();
 +
 +        /// <summary>
++        /// Plays fetched from osu! ("Fetch top plays") that kept no replay. Like <see cref="SyncedScores"/>, they were never recorded
++        /// as attempts here, so each one counts as one play from its score (its hits, and the map's length as play time).
++        /// </summary>
++        public List<Guid> BanchoScores { get; set; } = new List<Guid>();
++
++        /// <summary>
 +        /// Mods this profile blocks / only allows / applies on switching, or null for no rules.
 +        /// </summary>
 +        public LocalModRules? ModRules { get; set; }
@@ -13926,6 +14066,7 @@ index 0000000000..231e96014a
 +            // Shared, not copied: the store replaces these lists instead of changing them (a profile can have hundreds of synced plays).
 +            LinkedOwners = LinkedOwners,
 +            SyncedScores = SyncedScores,
++            BanchoScores = BanchoScores,
 +            ModRules = ModRules?.Clone(),
 +            AutoSwitch = AutoSwitch?.Clone(),
 +            SectionOrder = new List<string>(SectionOrder ?? new List<string>()),

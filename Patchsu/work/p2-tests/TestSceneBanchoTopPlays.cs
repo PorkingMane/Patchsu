@@ -211,6 +211,12 @@ namespace osu.Game.Tests.Visual.Navigation
                 new OsuRuleset().RulesetInfo, Game.Realm, Game.BeatmapManager, manager.Store, System.Threading.CancellationToken.None).GetResultSafely(), () => Is.GreaterThan(0));
             AddAssert("one download", () => downloads, () => Is.EqualTo(1));
             AddAssert("one page asked for", () => scoreRequests, () => Is.EqualTo(1));
+            AddAssert("only the play without a replay is marked", () => manager.Store.GetProfile(profile.Id)!.BanchoScores.Count, () => Is.EqualTo(1));
+            AddAssert("both plays count (play count, hits, play time)", () =>
+            {
+                var plays = fullStatistics().Plays;
+                return (plays.PlayCount, plays.Count(HitResult.Great), plays.PlayTimeSeconds > 0);
+            }, () => Is.EqualTo((2L, 580L, true)));
 
             AddAssert("play kept its details", () => Game.Realm.Run(r =>
             {
@@ -236,6 +242,43 @@ namespace osu.Game.Tests.Visual.Navigation
             AddAssert("no download asked", () => dialog(), () => Is.Null);
             AddAssert("no duplicates", profileScores, () => Is.EqualTo(2));
             AddAssert("replay not downloaded again", () => replayDownloads, () => Is.EqualTo(1));
+            AddAssert("still counted once each", () => fullStatistics().Plays.PlayCount, () => Is.EqualTo(2));
+        }
+
+        private LocalProfileStatistics fullStatistics() => LocalProfileStatistics.CalculateAsync(manager.Store.GetProfile(profile.Id)!, new OsuRuleset().RulesetInfo,
+            Game.Realm, Game.BeatmapManager, manager.Store, System.Threading.CancellationToken.None).GetResultSafely();
+
+        [Test]
+        public void TestOlderFetchedPlaysCountedOnce()
+        {
+            Guid fetched = Guid.Empty;
+
+            AddStep("add a play fetched by an older build (no replay, no online ID)", () => Game.Realm.Write(r =>
+            {
+                var beatmap = r.Find<BeatmapInfo>(owned.ID)!;
+                var score = new ScoreInfo(beatmap, r.Find<osu.Game.Rulesets.RulesetInfo>("osu")!, new osu.Game.Models.RealmUser { OnlineID = profile.UserId, Username = profile.Name })
+                {
+                    TotalScore = 1,
+                    OnlineID = -1,
+                    BeatmapHash = beatmap.Hash,
+                    Statistics = new Dictionary<HitResult, int> { [HitResult.Great] = 10 },
+                };
+                score.StatisticsJson = Newtonsoft.Json.JsonConvert.SerializeObject(score.Statistics);
+                fetched = score.ID;
+                r.Add(score);
+            }));
+            AddAssert("not counted before", () => fullStatistics().Plays.PlayCount, () => Is.EqualTo(0));
+            AddStep("forget the migration, run it (runs on load)", () =>
+            {
+                var store = manager.Store;
+                var data = typeof(LocalProfileStore).GetField("data", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
+                data.GetType().GetProperty("Version")!.SetValue(data, 1);
+                typeof(LocalProfileManager).GetMethod("migrateBanchoScores", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(manager, null);
+            });
+            AddAssert("marked", () => manager.Store.GetProfile(profile.Id)!.BanchoScores, () => Is.EquivalentTo(new[] { fetched }));
+            AddAssert("counted", () => (fullStatistics().Plays.PlayCount, fullStatistics().Plays.Count(HitResult.Great)), () => Is.EqualTo((1L, 10L)));
+            AddStep("run it again", () => typeof(LocalProfileManager).GetMethod("migrateBanchoScores", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(manager, null));
+            AddAssert("still once", () => fullStatistics().Plays.PlayCount, () => Is.EqualTo(1));
         }
 
         [Test]

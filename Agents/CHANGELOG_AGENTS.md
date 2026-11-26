@@ -1,5 +1,21 @@
 Changelog go in patch numerical order, so 0001 will be first and 1000 will be last unless its a breaking change.
 
+## 2026-11-26 · 0002 Total Play Time format, fetched osu! plays count
+
+- **0002** Total Play Time is formatted like the website / lazer's `TotalPlayTime`: `5h 12m`, with whole days in front from
+  24 hours on (`3d 4h 12m`; it used to stay in hours, e.g. `76h 12m`). New tooltip: the total in hours (rounded), or in
+  minutes while that's under 2 hours (`80 minutes`, `2 hours`, `29,621 hours`). Counting is unchanged.
+- **0002** Fix: plays from "Fetch top 200 plays" that kept no replay counted no play, hits or play time (only the ones whose
+  replay was downloaded did, as synced plays). New `LocalProfile.BanchoScores` (profiles.json) lists them; statistics count
+  them like synced plays (one play each, the map's length / rate as time, which is what osu!web counts for a pass). When a
+  replay replaces such a play, the play leaves the list (the replay counts as synced). `MovePlay` treats them like synced
+  plays. Plays fetched by older builds are marked once on startup (`LocalProfileManager.migrateBanchoScores`, profiles.json
+  `Version` 1 → 2): local profiles' scores with no replay file and no online ID. Not separated from other plays in the UI.
+  Known limit: a replay-less fetched play transferred to another profile by an older build is marked there too, so it counts twice.
+- Checked: 0002 applies on lazer + 0001 (tree identical to the work clone), full stack applies in glob order, Debug build
+  0 warnings. Tests: 79 + 8 Patchsu 0002 tests in the 0001+0002 clone, 251 + 50 Patchsu tests on the full stack, all pass.
+  New tests: `p2-tests/PatchsuPlayTimeFormatTest.cs`, `TestSceneBanchoTopPlays` (fetched plays counted, `TestOlderFetchedPlaysCountedOnce`).
+
 ## 2026-11-26 · 0002 new setting defaults
 
 - **0002** Defaults changed (`LocalProfileOptions`, `LocalProfileManager` bindables, `LocalPriorityPolicy.LocalMapsGivePerformance`):

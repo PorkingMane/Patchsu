@@ -29,7 +29,9 @@ Changelog go in patch numerical order, so 0001 will be first and 1000 will be la
 - **Patchsu single setting file**, `patchsu-osu/PatchsuSettings.json` in the osu! data folder (0001).
 - **Patchsu old folder rename**. The `osu-local` folder is renamed to `patchsu-osu` on the first start. Your old settings are moved over by themselves (from game.ini, profiles.json and patch12.json) and removed from the old places. (0001/0002/0003/0007/0008/0009)
 - `LOCAL map PP`, `Profiles with mod rules` and `Gray out scores that do not go towards PP` are now ON by default (0002)
-- New Feature. **Search scores by their set date**. You can now search scores by when they were set via `scoredate`,`datescore`,`playdate`. For example `playdate<=180d` will search for scores that are set within 180 days from now and show you those beatmaps. `<` `>` and `=` works as filters, as well as days `<30d`, weeks `>4w`, months `=1m` and years `<2y`. Example use case - whenever you import scores from Bancho to local profile you can filter out by date and remember your old maps without going through profile. (0003b)
+- Fixed scores from Bancho did not increase Judgments/Playtime and were imported as NUL owner ID/ (0002)
+- Fixed Total Play Time not matching osu!web / in-game profile viewer. (0002)
+- New Feature. **Search scores by their set date**. You can now search scores by when they were set via `scoredate`,`datescore`,`playdate`, For example `playdate<=180d` will search for scores that are set within 180 days from now and show you those beatmaps. `<` `>` and `=` works as filters, as well as days `<30d`, weeks `>4w`, months `=1m` and years `<2y`. Example use case - whenever you import scores from Bancho to local profile you can filter out by date and remember your old maps without going through profile. (0003b)
 
 ## V1.0 Release
 
