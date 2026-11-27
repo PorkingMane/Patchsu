@@ -1,5 +1,9 @@
 Changelog go in patch numerical order, so 0001 will be first and 1000 will be last unless its a breaking change.
 
+#### 28 November · 2 changes
+- Added Best Performance numbering whenever you open more than 5 best scores (0002)
+- Fixed Random V2 acronym not syncing with new one (RDV2 > V2) (0500)
+
 #### 27.5 November · 13 changes
 - Added tooltip color handles allowing more variety. This differs from original osu!lazer, but this is change is as minimal as possible (0001)
 - Fixed 'Exclude this difficulty from PP' and 'Exclude this beatmap from PP' to match lazer style (0002)

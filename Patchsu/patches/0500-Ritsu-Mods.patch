@@ -6096,7 +6096,7 @@ diff --git a/osu.Game/Scoring/IConfiguredMod.cs b/osu.Game/Scoring/IConfiguredMo
 index c49bf360e6..32da68feb6 100644
 --- a/osu.Game/Scoring/IConfiguredMod.cs
 +++ b/osu.Game/Scoring/IConfiguredMod.cs
-@@ -43,10 +43,20 @@ public static Mod ToMod(this IConfiguredMod configuredMod, Ruleset ruleset)
+@@ -43,10 +43,24 @@ public static Mod ToMod(this IConfiguredMod configuredMod, Ruleset ruleset)
  
              Mod? resultMod = ruleset.CreateModFromAcronym(configuredMod.Acronym);
  
@@ -6109,6 +6109,10 @@ index c49bf360e6..32da68feb6 100644
 +                recoveredAcronym = recoveredAcronym[..^2];
 +                resultMod = ruleset.CreateModFromAcronym(recoveredAcronym);
 +            }
++
++            // Random V2 was renamed from "RDV2" to "V2". Keep older scores and replays loading it.
++            if (resultMod == null && recoveredAcronym == @"RDV2")
++                resultMod = ruleset.CreateModFromAcronym(@"V2");
 +
              if (resultMod == null)
              {

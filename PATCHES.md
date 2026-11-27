@@ -26,6 +26,7 @@ This is a massive one. Literally, it has 16k lines of code in it at the time of 
     - Remove scores that can't be calculated (also from database)
     - Delete scores from local profile (with option to delete them from database as well)
     - Mod rules allows you to Block certain mods; Only allow selected mods; Allow selected mods with exact setting; Auto switch to profile whenever rule mod preset is activated
+    - Show score placement whenever you open more than 5 scores. Would love to see this as lazer feature, but it is not yet sadly
 
 ^ - if you have scores under same name in database (locally) as your local profile, game will suggest you to sync every single one of them to your profile. Changing your name/pfp/flag will reflect on local leaderboards as well if you sync them. Deleting your profile WITH scores that were synced WOULD NOT delete scores from database. They are kept as a separate connection and Patchsu gives them back to the player ID they belonged to before
 

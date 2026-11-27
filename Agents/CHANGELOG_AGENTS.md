@@ -1,5 +1,16 @@
 Changelog go in patch numerical order, so 0001 will be first and 1000 will be last unless its a breaking change.
 
+## 2026-11-28 · 0002 Best Performance placement numbers after "show more"
+
+- **0002** `LocalProfileOverlay` `ScoresPanel.addRows`: once the best list is expanded past its first 5, every best row gets
+  `ScoreRow.ShowPlacement(index + 1)`: a small number (size 12, `Content2`) fades in on the left and the row content's left padding
+  goes 20 → 44 (400 ms OutQuint). Rows not loaded yet (page opening fully expanded) get it without animation in `LoadComplete`.
+  The number sprite sits in the row's cached buffer (alpha 0 until shown), so no extra draw calls once settled.
+- Follow-up: the number also slides 10 px right → left into place, and rows added by "show more" animate with the first 5 (they used
+  to appear already shifted, since they aren't loaded yet when placed): `ShowPlacement(place, animate)`, animated from `LoadComplete`.
+  A page opening fully expanded still shows them without animation.
+- Tests: full stack builds 0 warnings; p2-tests + opt profile/statistics tests pass (42). Checked on screen (scratch `OsuGame`).
+
 ## 2026-11-28 · 0003 PP sort and leaderboard tooltip follow PP option changes
 
 - **0003** `LeaderboardManager.FetchWithCriteria`: fetching the same criteria again clears `calculatedPerformance`, so the PP sort
@@ -90,6 +101,12 @@ Changelog go in patch numerical order, so 0001 will be first and 1000 will be la
   "inside". No line / border when it would land inside itself or where it already is. Sub-collections move along.
 - Tests: `TestSceneManageCollectionFolders` +2 (bottom edge moves inside with sub-collections and beatmaps, top edge moves to top level,
   no line on its own parent).
+
+## 2026-11-28 · 0500 Old RandomV2 scores and replays load again
+
+- **0500** `ConfiguredModExtensions.ToMod`: acronym `RDV2` (RandomV2 before it became `V2`) resolves to `V2`, so old scores in realm
+  and old `.osr` imports get the real mod (with seed / settings) instead of `UnknownMod`, and their replays stay in sync.
+- Tests: full stack builds 0 warnings. No test run.
 
 ## 2026-11-28 · 0500 RandomV2 spacing previews
 

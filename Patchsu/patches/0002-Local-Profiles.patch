@@ -8217,10 +8217,10 @@ index 0000000000..80249a74d9
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileOverlay.cs b/osu.Game/LocalPriority/LocalProfileOverlay.cs
 new file mode 100644
-index 0000000000..7ffe131d43
+index 0000000000..cd7edc5ae5
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileOverlay.cs
-@@ -0,0 +1,4235 @@
+@@ -0,0 +1,4306 @@
 +using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -11826,6 +11826,14 @@ index 0000000000..7ffe131d43
 +                    rows?.Add(row);
 +                }
 +
++                // Expanded past the first scores: every best score shows its place in the list, all at once (animated after "show more",
++                // rows shown and rows just added alike).
++                if (rows != null && step > 0)
++                {
++                    for (int i = 0; i < rows.Count; i++)
++                        rows[i].ShowPlacement(i + 1, animate: from > 0);
++                }
++
 +                if (shown < scores.Length && step + 1 < expansion_steps.Length)
 +                {
 +                    ShowMoreButton button = null!;
@@ -11940,6 +11948,27 @@ index 0000000000..7ffe131d43
 +
 +            private Container rankBadge = null!;
 +
++            /// <summary>
++            /// The space the content moves right by to fit the score's place in the list on its left.
++            /// </summary>
++            private const float placement_width = 24;
++
++            private const float content_left_padding = 20;
++
++            private const double placement_fade_time = 400;
++
++            /// <summary>
++            /// How far right of its place the number starts, sliding left into it as it fades in.
++            /// </summary>
++            private const float placement_slide = 10;
++
++            private const float placement_x = (content_left_padding + placement_width) / 2;
++
++            private Container rowContent = null!;
++            private OsuSpriteText placementText = null!;
++            private int? placement;
++            private bool animatePlacement;
++
 +            public MenuItem[]? ContextMenuItems => CreateContextMenuItems?.Invoke();
 +
 +            /// <summary>
@@ -12001,11 +12030,20 @@ index 0000000000..7ffe131d43
 +                    {
 +                        Children = new Drawable[]
 +                        {
-+                            new Container
++                            placementText = new OsuSpriteText
++                            {
++                                Anchor = Anchor.CentreLeft,
++                                Origin = Anchor.Centre,
++                                X = placement_x,
++                                Font = OsuFont.GetFont(size: 12, weight: FontWeight.SemiBold),
++                                Colour = colours.Content2,
++                                Alpha = 0,
++                            },
++                            rowContent = new Container
 +                            {
 +                                RelativeSizeAxes = Axes.Both,
 +                                Alpha = counts ? 1 : non_counting_content_alpha,
-+                                Padding = new MarginPadding { Left = 20, Right = performance_width },
++                                Padding = new MarginPadding { Left = content_left_padding, Right = performance_width },
 +                                Children = new Drawable[]
 +                                {
 +                                    new FillFlowContainer
@@ -12172,6 +12210,39 @@ index 0000000000..7ffe131d43
 +                var liveLayer = new LiveLayer();
 +                Add(liveLayer);
 +                liveLayer.Track(rankBadge, new Container { Child = new DrawableRank(score.Rank) });
++            }
++
++            protected override void LoadComplete()
++            {
++                base.LoadComplete();
++
++                // Placed before it loaded: rows just added by "show more" animate with the rest, a page that opens with every score shown
++                // has them from the start.
++                if (placement != null)
++                    applyPlacement(animatePlacement ? placement_fade_time : 0);
++            }
++
++            /// <summary>
++            /// Shows the score's place in the list on the left, with the content moving right to make room.
++            /// </summary>
++            public void ShowPlacement(int place, bool animate)
++            {
++                if (placement != null)
++                    return;
++
++                placement = place;
++                animatePlacement = animate;
++
++                if (IsLoaded)
++                    applyPlacement(animate ? placement_fade_time : 0);
++            }
++
++            private void applyPlacement(double duration)
++            {
++                placementText.Text = placement!.Value.ToString();
++                placementText.FadeIn(duration, Easing.OutQuint);
++                placementText.MoveToX(placement_x + placement_slide).MoveToX(placement_x, duration, Easing.OutQuint);
++                rowContent.TransformTo(nameof(Padding), new MarginPadding { Left = content_left_padding + placement_width, Right = performance_width }, duration, Easing.OutQuint);
 +            }
 +
 +            /// <summary>

@@ -88,6 +88,9 @@ A fully local profile system with its own profile page, laid out like the websit
   (a 30-second countdown; Settings → Patchsu can extend it to 1 minute). During that last look its Best Performance scores fade
   away one by one: after a 5-second look, lowest PP first (shuffled among near neighbours), then the top 10 one a second over
   the last 10 seconds, #1 last. The countdown shows seconds only (30:00 / 60:00) and makes a sound only in its last 3 seconds.
+- Best Performance "show more": every best score row (the first 5 and the newly added ones, in the same frame) fades in its place in
+  the list (1, 2, 3 …) on the left, sliding 10 px right to left into place, while the rank badge and beatmap info slide 24 px right (`ScoreRow.ShowPlacement`, 400 ms OutQuint padding transform inside the row's cached buffer). Compact
+  view (first 5) has no numbers; pages that open fully expanded (dying profile's last look) show them from the start. Recent Plays never.
 - Failed / quit plays in Recent Plays open their beatmap in song select on click (there are no results or replay to open).
 - Speedrun profiles ("⋮" → New 'Speedrun' profile, "SP Profile N", numbered and reset like SD/PF ones): set one goal in the
   window that opens, a PP value (`1000`) or an estimated global rank (`#10000`). The other half is estimated as you type and
@@ -311,12 +314,12 @@ acronyms kept as in Ritsu.
 |---|---|
 | Difficulty reduction | Streamline (HST) |
 | Difficulty increase | Miss Challenge (MC), No Sliding (NL), One Eye (HFR), Decoy Circles (DCY), Reversed Sliders (RSL) |
-| Conversion | Circle Generation (CG), RandomV2 (RDV2), Spacing Adjust (SA) / Spacing Overtime (SOT) |
+| Conversion | Circle Generation (CG), RandomV2 (V2), Spacing Adjust (SA) / Spacing Overtime (SOT) |
 | Fun | Metronome (ME) |
 | System | Phrase Mirror (PMR), Echo (ECH), Swing (SWG) |
 
 Patchsu additions: No Sliding length threshold, and scores saved with an unresolved mod (`XX??`)
-resolve to the real mod. Own mod icons for Decoy Circles, Miss Challenge, No Sliding and RandomV2 (`ritsu-*.png`). Not ported: Directional Flicks, RandomV2 / Spacing Adjust replay panels.
+resolve to the real mod, as does the old RandomV2 acronym `RDV2`. Own mod icons for Decoy Circles, Miss Challenge, No Sliding and RandomV2 (`ritsu-*.png`). Not ported: Directional Flicks, RandomV2 / Spacing Adjust replay panels.
 RandomV2 settings are reordered (`OrderPosition`: spacing, angles, patterns, Seed last) and reworded. "Angle style"
 (Random / Star / 45° / 90°, `AngleStyleSetting`) replaces the "Custom angle" toggle: it drives the still saved `CustomAngle` +
 `Angle` (Random = `CustomAngle` off, or on with `AngleEnum.Custom` while patterns are selected; picking a pattern turns it on), so
