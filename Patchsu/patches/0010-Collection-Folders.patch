@@ -28,6 +28,7 @@ Song select, "Group by: Collections":
   the open folder, sub-folders included.
 
 Song select, collection filter (the "Collection" dropdown):
+- Only top level collections are listed (no "Parent/Child" entries).
 - Picking a collection also shows the beatmaps of its sub-collections. If it has sub-collections and "Group by" is None,
   they are folder rows at the top (same folders as above), and the collection's own sets follow them loose.
   Without sub-collections it looks exactly like vanilla.
@@ -40,9 +41,20 @@ Elsewhere:
 - Manage collections dialog: listed as a tree (sub-collections indented under their parent, which shows only the
   rest of the name), a "+" button per collection adds "New collection" inside it and focuses its name. Renaming a
   parent renames its sub-collections too. The dialog's delete button still deletes only that one collection.
+- Manage collections, right-click a collection (the menu opens on release): "Merge into" (nested like the beatmap
+  menus; a parent's submenu starts with the parent itself; not itself or its own sub-collections), "Rename" (focuses
+  the name), "New sub-collection" (same as "+"). Merging moves the beatmaps of the collection and all its
+  sub-collections into the target (flattened) and removes them, straight away.
+- Holding the right mouse button on a collection for 500 ms drags it: a see-through copy of its name box follows the
+  cursor. Over the middle of a row, that row gets a yellow border and releasing merges into it. Over a row's top edge a
+  yellow line above it moves the collection next to that row (into the row's parent, top level for top level rows);
+  over its bottom edge a line one level deeper moves it inside that row as a sub-collection. Sub-collections move along.
+  Nothing shows for a spot that would put it inside itself or where it already is. Released anywhere else cancels.
+  Released before 500 ms it's a normal right click.
 
 How it works (for later patches):
-- New files: Collections/CollectionFolders.cs (path parsing, tree, nested menus, create / rename / move / delete),
+- New files: Collections/CollectionFolders.cs (path parsing, tree, nested menus, create / rename / move / merge / delete),
+  Collections/DrawableCollectionList(Item).CollectionFolders.cs (manage dialog right-click menu and merge drag),
   Screens/Select/BeatmapCarouselFilterGrouping.CollectionFolders.cs (builds the folder items; also defines
   CollectionFolderGroupDefinition, equal by path, with a Parent chain), Screens/Select/BeatmapCarousel.CollectionFolders.cs
   (open chain, visibility, indent, spacing), Screens/Select/PanelCollectionFolder.cs.
@@ -56,15 +68,16 @@ How it works (for later patches):
   BeatmapCarousel (spacing, activation, selection, group traversal, setExpandedGroup, set visibility, X offset, pool,
   panel), Carousel.TryFindOwnGroupItem (shift+enter) and ShouldActivateKeyboardSelectionBeforeSetTraversal
   (left/right from a folder header), Panel.ShiftWhenCollapsed, the collection menu builders in
-  PanelBeatmapSet / SongSelect / CollectionPopover, DrawableCollectionList(Item), DrawableStatefulMenuItem (a toggle
+  PanelBeatmapSet / SongSelect / CollectionPopover, DrawableCollectionList(Item), ManageCollectionsDialog (context menu
+  container outside the rounded mask), CollectionDropdown (top level query), DrawableStatefulMenuItem (a toggle
   with a submenu still toggles on click; the framework only opens the submenu).
 
 diff --git a/osu.Game/Collections/CollectionFolders.cs b/osu.Game/Collections/CollectionFolders.cs
 new file mode 100644
-index 0000000000..c97ffd3bac
+index 0000000000..e4c85e0e4a
 --- /dev/null
 +++ b/osu.Game/Collections/CollectionFolders.cs
-@@ -0,0 +1,304 @@
+@@ -0,0 +1,329 @@
 +// Added by Patchsu
 +
 +using System;
@@ -327,21 +340,46 @@ index 0000000000..c97ffd3bac
 +                if (parent == null)
 +                    r.Add(parent = new BeatmapCollection(parentPath));
 +
-+                var known = parent.BeatmapMD5Hashes.ToHashSet();
-+
-+                foreach (string hash in inside.SelectMany(c => c.BeatmapMD5Hashes))
-+                {
-+                    if (known.Add(hash))
-+                        parent.BeatmapMD5Hashes.Add(hash);
-+                }
-+
-+                parent.LastModified = DateTimeOffset.UtcNow;
-+
-+                foreach (var c in inside)
-+                    r.Remove(c);
-+
++                merge(r, inside, parent);
 +                return inside.Count;
 +            });
++        }
++
++        /// <summary>
++        /// Moves the beatmaps of a folder and all its sub-collections into another collection (flattened), then removes
++        /// the folder's collections. Does nothing if the target is inside the folder.
++        /// </summary>
++        /// <returns>The number of collections merged.</returns>
++        public static int MergeInto(RealmAccess realm, IReadOnlyList<string> folder, Guid targetId) => realm.Write(r =>
++        {
++            var target = r.Find<BeatmapCollection>(targetId);
++
++            if (target == null || IsSameOrInside(Split(target.Name), folder))
++                return 0;
++
++            var inside = r.All<BeatmapCollection>().AsEnumerable().Where(c => IsSameOrInside(Split(c.Name), folder)).ToList();
++
++            if (inside.Count == 0)
++                return 0;
++
++            merge(r, inside, target);
++            return inside.Count;
++        });
++
++        private static void merge(Realms.Realm r, List<BeatmapCollection> sources, BeatmapCollection target)
++        {
++            var known = target.BeatmapMD5Hashes.ToHashSet();
++
++            foreach (string hash in sources.SelectMany(c => c.BeatmapMD5Hashes))
++            {
++                if (known.Add(hash))
++                    target.BeatmapMD5Hashes.Add(hash);
++            }
++
++            target.LastModified = DateTimeOffset.UtcNow;
++
++            foreach (var c in sources)
++                r.Remove(c);
 +        }
 +
 +        /// <summary>
@@ -369,11 +407,295 @@ index 0000000000..c97ffd3bac
 +        #endregion
 +    }
 +}
+diff --git a/osu.Game/Collections/DrawableCollectionList.CollectionFolders.cs b/osu.Game/Collections/DrawableCollectionList.CollectionFolders.cs
+new file mode 100644
+index 0000000000..7f49d8185f
+--- /dev/null
++++ b/osu.Game/Collections/DrawableCollectionList.CollectionFolders.cs
+@@ -0,0 +1,278 @@
++// Added by Patchsu
++
++using System;
++using System.Linq;
++using osu.Framework.Allocation;
++using osu.Framework.Extensions.Color4Extensions;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Containers;
++using osu.Framework.Graphics.Shapes;
++using osu.Game.Graphics;
++using osu.Game.Graphics.Cursor;
++using osu.Game.Graphics.Sprites;
++using osu.Game.Localisation;
++using osuTK;
++using osuTK.Input;
++
++namespace osu.Game.Collections
++{
++    // Patchsu patch 10: a row dragged with the right mouse button merges into the row it's dropped on (middle of the row),
++    // or moves next to it (top edge) / inside it (bottom edge), shown by a line where it would go.
++    public partial class DrawableCollectionList
++    {
++        [Resolved]
++        private OsuContextMenuContainer? contextMenuContainer { get; set; }
++
++        private DrawableCollectionListItem? mergeSource;
++        private string[] mergeSourcePath = Array.Empty<string>();
++        private MergeDragPreview? mergePreview;
++        private Container? moveLine;
++
++        /// <summary>
++        /// Whether the dragged row would move (next to / inside the row under the cursor) when dropped.
++        /// </summary>
++        public bool ShowingMoveLine => moveLine?.Alpha > 0;
++
++        /// <summary>
++        /// Preview position relative to the cursor.
++        /// </summary>
++        private Vector2 mergeGrabOffset;
++
++        private DrawableCollectionListItem? dropRow;
++        private DropKind dropKind;
++
++        private enum DropKind
++        {
++            None,
++
++            /// <summary>
++            /// Merge into the row.
++            /// </summary>
++            Merge,
++
++            /// <summary>
++            /// Move next to the row (into the row's parent).
++            /// </summary>
++            Beside,
++
++            /// <summary>
++            /// Move inside the row, as its sub-collection.
++            /// </summary>
++            Inside,
++        }
++
++        private void beginMergeDrag(DrawableCollectionListItem source)
++        {
++            if (mergeSource != null)
++                return;
++
++            contextMenuContainer?.CloseMenu();
++
++            mergeSource = source;
++            mergeSourcePath = source.FolderPath;
++            source.FadeTo(0.5f, 100);
++
++            var nameBox = source.NameBox;
++            var mouse = GetContainingInputManager()!.CurrentState.Mouse.Position;
++            mergeGrabOffset = ToLocalSpace(nameBox.ScreenSpaceDrawQuad.TopLeft) - ToLocalSpace(mouse);
++
++            AddInternal(mergePreview = new MergeDragPreview(source.DisplayName, source.BeatmapCount)
++            {
++                Size = nameBox.DrawSize,
++            });
++
++            // above the preview, so it isn't dimmed by it.
++            AddInternal(moveLine = new Container
++            {
++                Origin = Anchor.CentreLeft,
++                Height = 3,
++                Masking = true,
++                CornerRadius = 1.5f,
++                Alpha = 0,
++                Child = new Box { RelativeSizeAxes = Axes.Both, Colour = colours.Yellow },
++            });
++
++            updateMergeDrag();
++        }
++
++        [Resolved]
++        private OsuColour colours { get; set; } = null!;
++
++        protected override void Update()
++        {
++            base.Update();
++
++            if (mergeSource != null)
++                updateMergeDrag();
++        }
++
++        private void updateMergeDrag()
++        {
++            var mouse = GetContainingInputManager()!.CurrentState.Mouse;
++
++            if (!mouse.IsPressed(MouseButton.Right) || mergeSource?.Parent == null)
++            {
++                endMergeDrag();
++                return;
++            }
++
++            mergePreview!.Position = ToLocalSpace(mouse.Position) - ChildOffset + mergeGrabOffset;
++
++            DrawableCollectionListItem? row = null;
++            var kind = DropKind.None;
++
++            if (scroll.ScreenSpaceDrawQuad.Contains(mouse.Position))
++            {
++                // half the spacing between rows counts towards the row next to it, so there's no dead gap.
++                float gap = flow.Spacing.Y / 2;
++
++                foreach (var item in flow)
++                {
++                    if (item is not DrawableCollectionListItem drawable || !drawable.IsPresent || !drawable.Model.IsManaged)
++                        continue;
++
++                    var local = drawable.ToLocalSpace(mouse.Position);
++
++                    if (local.X < 0 || local.X > drawable.DrawWidth || local.Y < -gap || local.Y > drawable.DrawHeight + gap)
++                        continue;
++
++                    row = drawable;
++                    float position = local.Y / drawable.DrawHeight;
++                    kind = position < 0.25f ? DropKind.Beside : position > 0.75f ? DropKind.Inside : DropKind.Merge;
++                    break;
++                }
++            }
++
++            if (row != dropRow || kind != dropKind)
++            {
++                dropRow?.SetMergeTarget(false);
++
++                dropRow = row;
++                dropKind = row == null || !isValidDrop(row.FolderPath, kind) ? DropKind.None : kind;
++
++                if (dropKind == DropKind.Merge)
++                    dropRow!.SetMergeTarget(true);
++
++                moveLine!.Alpha = dropKind == DropKind.Beside || dropKind == DropKind.Inside ? 1 : 0;
++            }
++
++            if (moveLine!.Alpha > 0)
++            {
++                var nameBox = dropRow!.NameBox;
++                var topLeft = ToLocalSpace(nameBox.ScreenSpaceDrawQuad.TopLeft) - ChildOffset;
++                float indent = dropKind == DropKind.Inside ? DrawableCollectionListItem.FOLDER_INDENT : 0;
++                float gap = flow.Spacing.Y / 2;
++
++                moveLine.Position = new Vector2(topLeft.X + indent, dropKind == DropKind.Inside ? topLeft.Y + nameBox.DrawHeight + gap : topLeft.Y - gap);
++                moveLine.Width = nameBox.DrawWidth - indent;
++            }
++        }
++
++        private bool isValidDrop(string[] rowPath, DropKind kind)
++        {
++            switch (kind)
++            {
++                case DropKind.Merge:
++                    // not into itself or its own sub-collections.
++                    return !CollectionFolders.IsSameOrInside(rowPath, mergeSourcePath);
++
++                case DropKind.Beside:
++                case DropKind.Inside:
++                    string[] newParent = getNewParent(rowPath, kind);
++
++                    // not inside itself, and not where it already is.
++                    return !CollectionFolders.IsSameOrInside(newParent, mergeSourcePath)
++                           && !newParent.AsSpan().SequenceEqual(mergeSourcePath.AsSpan(0, mergeSourcePath.Length - 1));
++
++                default:
++                    return false;
++            }
++        }
++
++        private static string[] getNewParent(string[] rowPath, DropKind kind) => kind == DropKind.Inside ? rowPath : rowPath[..^1];
++
++        private void endMergeDrag()
++        {
++            if (dropRow != null && dropRow.Model.IsManaged)
++            {
++                switch (dropKind)
++                {
++                    case DropKind.Merge:
++                        Guid targetId = dropRow.Model.ID;
++                        CollectionFolders.MergeInto(realm, mergeSourcePath, targetId);
++                        break;
++
++                    case DropKind.Beside:
++                    case DropKind.Inside:
++                        CollectionFolders.MoveFolderInto(realm, mergeSourcePath, getNewParent(dropRow.FolderPath, dropKind));
++                        break;
++                }
++            }
++
++            mergeSource?.FadeTo(1, 100);
++            dropRow?.SetMergeTarget(false);
++            mergePreview?.FadeOut(100).Expire();
++            moveLine?.Expire();
++
++            mergeSource = dropRow = null;
++            dropKind = DropKind.None;
++            mergePreview = null;
++            moveLine = null;
++        }
++
++        /// <summary>
++        /// A see-through copy of the dragged row's name box that follows the cursor.
++        /// </summary>
++        private partial class MergeDragPreview : CompositeDrawable
++        {
++            private readonly string name;
++            private readonly int count;
++
++            public MergeDragPreview(string name, int count)
++            {
++                this.name = name;
++                this.count = count;
++
++                Alpha = 0.5f;
++                Masking = true;
++                CornerRadius = 10;
++                CornerExponent = 2.5f;
++            }
++
++            [BackgroundDependencyLoader]
++            private void load(OsuColour colours)
++            {
++                InternalChildren = new Drawable[]
++                {
++                    new Box
++                    {
++                        RelativeSizeAxes = Axes.Both,
++                        Colour = colours.GreySeaFoamDarker.Darken(0.5f),
++                    },
++                    new FillFlowContainer
++                    {
++                        Anchor = Anchor.CentreLeft,
++                        Origin = Anchor.CentreLeft,
++                        AutoSizeAxes = Axes.Both,
++                        Direction = FillDirection.Vertical,
++                        X = DrawableCollectionListItem.TEXT_PADDING,
++                        Children = new Drawable[]
++                        {
++                            new OsuSpriteText
++                            {
++                                Text = name,
++                                Font = OsuFont.Default.With(size: DrawableCollectionListItem.NAME_TEXT_SIZE),
++                            },
++                            new OsuSpriteText
++                            {
++                                Text = CommonStrings.ItemsCount(count),
++                                Font = OsuFont.Default.With(size: 12, weight: FontWeight.SemiBold),
++                                Colour = colours.Yellow,
++                            },
++                        }
++                    },
++                };
++            }
++        }
++    }
++}
 diff --git a/osu.Game/Collections/DrawableCollectionList.cs b/osu.Game/Collections/DrawableCollectionList.cs
-index 5c79549c0a..da598a583a 100644
+index 5c79549c0a..6692cae212 100644
 --- a/osu.Game/Collections/DrawableCollectionList.cs
 +++ b/osu.Game/Collections/DrawableCollectionList.cs
-@@ -73,40 +73,127 @@ protected override void OnItemsChanged()
+@@ -73,40 +73,128 @@ protected override void OnItemsChanged()
                  if (createdItem != null)
                  {
                      ScheduleAfterChildren(() => scroll.ScrollIntoView(createdItem));
@@ -504,6 +826,7 @@ index 5c79549c0a..da598a583a 100644
 +            {
 +                FolderDepth = depth,
 +                FolderParent = parent,
++                BeginMergeDrag = beginMergeDrag,
 +                AddSubCollection = segments =>
 +                {
 +                    focusNextCreated = true;
@@ -514,8 +837,183 @@ index 5c79549c0a..da598a583a 100644
  
          protected override void Dispose(bool isDisposing)
          {
+diff --git a/osu.Game/Collections/DrawableCollectionListItem.CollectionFolders.cs b/osu.Game/Collections/DrawableCollectionListItem.CollectionFolders.cs
+new file mode 100644
+index 0000000000..c8c13f9db4
+--- /dev/null
++++ b/osu.Game/Collections/DrawableCollectionListItem.CollectionFolders.cs
+@@ -0,0 +1,169 @@
++// Added by Patchsu
++
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using osu.Framework.Allocation;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Cursor;
++using osu.Framework.Graphics.Sprites;
++using osu.Framework.Graphics.UserInterface;
++using osu.Framework.Input.Events;
++using osu.Framework.Threading;
++using osu.Game.Database;
++using osu.Game.Graphics.Cursor;
++using osu.Game.Graphics.UserInterface;
++using osuTK.Input;
++
++namespace osu.Game.Collections
++{
++    // Patchsu patch 10: right-click menu (merge into, rename, new sub-collection).
++    // Holding the right mouse button drags the row onto another one to merge them.
++    public partial class DrawableCollectionListItem : IHasContextMenu
++    {
++        /// <summary>
++        /// How long the right mouse button is held before the row starts dragging.
++        /// </summary>
++        public const double MERGE_HOLD_DURATION = 500;
++
++        /// <summary>
++        /// Space left of the name in the name box.
++        /// </summary>
++        public const float TEXT_PADDING = item_height / 2;
++
++        /// <summary>
++        /// Size of the name in the name box (the text area left above the beatmap count).
++        /// </summary>
++        public const float NAME_TEXT_SIZE = (item_height - 12) / 2;
++
++        /// <summary>
++        /// Indent of a sub-collection row under its parent.
++        /// </summary>
++        public const float FOLDER_INDENT = 25;
++
++        /// <summary>
++        /// Starts dragging this row to merge it into another one. Null keeps the vanilla right click.
++        /// </summary>
++        public Action<DrawableCollectionListItem>? BeginMergeDrag { get; init; }
++
++        /// <summary>
++        /// The name text box, which the drag preview copies.
++        /// </summary>
++        public Drawable NameBox => TextBox;
++
++        public string DisplayName => TextBox.Current.Value;
++
++        public int BeatmapCount => Model.PerformRead(c => c.IsValid ? c.BeatmapMD5Hashes.Count : 0);
++
++        public string[] FolderPath => CollectionFolders.Split(Model.PerformRead(c => c.IsValid ? c.Name : string.Empty));
++
++        [Resolved]
++        private RealmAccess realm { get; set; } = null!;
++
++        [Resolved]
++        private OsuContextMenuContainer? contextMenuContainer { get; set; }
++
++        private ScheduledDelegate? mergeHoldDelegate;
++
++        protected override bool OnMouseDown(MouseDownEvent e)
++        {
++            if (e.Button != MouseButton.Right || BeginMergeDrag == null || !Model.IsManaged)
++                return base.OnMouseDown(e);
++
++            mergeHoldDelegate?.Cancel();
++            mergeHoldDelegate = Scheduler.AddDelayed(() =>
++            {
++                mergeHoldDelegate = null;
++                BeginMergeDrag(this);
++            }, MERGE_HOLD_DURATION);
++
++            // the context menu opens on release instead (when released before the drag starts).
++            return true;
++        }
++
++        protected override void OnMouseUp(MouseUpEvent e)
++        {
++            if (e.Button == MouseButton.Right && mergeHoldDelegate != null)
++            {
++                mergeHoldDelegate.Cancel();
++                mergeHoldDelegate = null;
++
++                if (IsHovered)
++                    contextMenuContainer?.TriggerEvent(new MouseDownEvent(e.CurrentState, MouseButton.Right));
++            }
++
++            base.OnMouseUp(e);
++        }
++
++        /// <summary>
++        /// Highlights the row as the one a dragged row merges into.
++        /// </summary>
++        public void SetMergeTarget(bool isTarget)
++        {
++            IsMergeTarget = isTarget;
++
++            // the same border as a focused name box.
++            TextBox.BorderThickness = isTarget || TextBox.HasFocus ? 3 : 0;
++        }
++
++        public bool IsMergeTarget { get; private set; }
++
++        public MenuItem[] ContextMenuItems
++        {
++            get
++            {
++                if (!Model.IsManaged)
++                    return Array.Empty<MenuItem>();
++
++                string[] path = FolderPath;
++                var items = new List<MenuItem>();
++
++                // anything but itself and its own sub-collections.
++                var mergeTargets = realm.Run(r => CollectionFolders.BuildTree(r.All<BeatmapCollection>()
++                                                                               .OrderBy(c => c.Name)
++                                                                               .AsEnumerable()
++                                                                               .Where(c => !CollectionFolders.IsSameOrInside(CollectionFolders.Split(c.Name), path)))
++                                                                    .SelectMany(n => createMergeTargets(n, path))
++                                                                    .ToList());
++
++                if (mergeTargets.Count > 0)
++                    items.Add(new OsuMenuItem("Merge into") { Icon = FontAwesome.Solid.CompressArrowsAlt, Items = mergeTargets });
++
++                items.Add(new OsuMenuItem("Rename", MenuItemType.Standard, FocusName) { Icon = FontAwesome.Solid.PencilAlt });
++
++                if (AddSubCollection != null)
++                    items.Add(new OsuMenuItem("New sub-collection", MenuItemType.Standard, () => AddSubCollection(path)) { Icon = FontAwesome.Solid.FolderPlus });
++
++                return items.ToArray();
++            }
++        }
++
++        /// <summary>
++        /// A folder with sub-collections opens a submenu that starts with the folder's own collection.
++        /// </summary>
++        private IEnumerable<MenuItem> createMergeTargets(CollectionFolders.Node node, string[] source)
++        {
++            var items = node.Collections.Select(c =>
++            {
++                Guid id = c.ID;
++                return (MenuItem)new OsuMenuItem(node.Name, MenuItemType.Standard, () => CollectionFolders.MergeInto(realm, source, id));
++            }).ToList();
++
++            if (node.Children.Count == 0)
++                return items;
++
++            if (items.Count > 0)
++                items.Add(new OsuMenuItemSpacer());
++
++            items.AddRange(node.Children.SelectMany(c => createMergeTargets(c, source)));
++
++            return new MenuItem[] { new OsuMenuItem(node.Name) { Items = items } };
++        }
++
++        protected override void Dispose(bool isDisposing)
++        {
++            mergeHoldDelegate?.Cancel();
++            base.Dispose(isDisposing);
++        }
++    }
++}
 diff --git a/osu.Game/Collections/DrawableCollectionListItem.cs b/osu.Game/Collections/DrawableCollectionListItem.cs
-index 2dae6db912..11a40ea83b 100644
+index 2dae6db912..453eb2c8ef 100644
 --- a/osu.Game/Collections/DrawableCollectionListItem.cs
 +++ b/osu.Game/Collections/DrawableCollectionListItem.cs
 @@ -3,6 +3,7 @@
@@ -576,7 +1074,7 @@ index 2dae6db912..11a40ea83b 100644
 +            FolderParent = FolderParent,
 +            AddSubCollection = AddSubCollection,
 +            // Patchsu patch 10: sub-collections are indented under their parent.
-+            Indent = FolderDepth * 25,
++            Indent = FolderDepth * FOLDER_INDENT,
 +        };
  
          /// <summary>
@@ -788,8 +1286,46 @@ index 2dae6db912..11a40ea83b 100644
                              Size = new Vector2(10),
                              Icon = FontAwesome.Solid.Trash
                          }
+diff --git a/osu.Game/Collections/ManageCollectionsDialog.cs b/osu.Game/Collections/ManageCollectionsDialog.cs
+index 958e169542..bf7e46d86c 100644
+--- a/osu.Game/Collections/ManageCollectionsDialog.cs
++++ b/osu.Game/Collections/ManageCollectionsDialog.cs
+@@ -10,6 +10,7 @@
+ using osu.Game.Database;
+ using osu.Game.Graphics;
+ using osu.Game.Graphics.Containers;
++using osu.Game.Graphics.Cursor;
+ using osu.Game.Graphics.Sprites;
+ using osu.Game.Graphics.UserInterface;
+ using osu.Game.Localisation;
+@@ -43,10 +44,23 @@ public ManageCollectionsDialog()
+             RelativeSizeAxes = Axes.Both;
+             Size = new Vector2(0.5f, 0.8f);
+ 
+-            Masking = true;
+-            CornerRadius = 10;
++            // Patchsu patch 10: right-click menu on collections, outside the rounded mask so its submenus aren't cut off.
++            InternalChild = new OsuContextMenuContainer
++            {
++                RelativeSizeAxes = Axes.Both,
++                Child = content = new Container
++                {
++                    RelativeSizeAxes = Axes.Both,
++                    Masking = true,
++                    CornerRadius = 10,
++                }
++            };
+         }
+ 
++        private readonly Container content;
++
++        protected override Container<Drawable> Content => content;
++
+         [BackgroundDependencyLoader]
+         private void load(OsuColour colours)
+         {
 diff --git a/osu.Game/Graphics/Carousel/Carousel.cs b/osu.Game/Graphics/Carousel/Carousel.cs
-index b6240a833d..454b5a02ae 100644
+index b6240a833d..9957a24c57 100644
 --- a/osu.Game/Graphics/Carousel/Carousel.cs
 +++ b/osu.Game/Graphics/Carousel/Carousel.cs
 @@ -268,6 +268,22 @@ protected virtual void HandleFilterCompleted()
@@ -878,7 +1414,7 @@ index b6240a833d..454b5a02ae 100644
          {
              if (carouselItems == null || carouselItems.Count == 0) return;
 diff --git a/osu.Game/Graphics/UserInterface/DrawableStatefulMenuItem.cs b/osu.Game/Graphics/UserInterface/DrawableStatefulMenuItem.cs
-index 8812696493..57bf7999b0 100644
+index 8812696493..63d5641d2a 100644
 --- a/osu.Game/Graphics/UserInterface/DrawableStatefulMenuItem.cs
 +++ b/osu.Game/Graphics/UserInterface/DrawableStatefulMenuItem.cs
 @@ -4,6 +4,7 @@
@@ -907,7 +1443,7 @@ index 8812696493..57bf7999b0 100644
  
          private partial class ToggleTextContainer : TextContainer
 diff --git a/osu.Game/Screens/Ranking/CollectionPopover.cs b/osu.Game/Screens/Ranking/CollectionPopover.cs
-index 2795627b44..28d82cb57d 100644
+index 2795627b44..68c5d57f68 100644
 --- a/osu.Game/Screens/Ranking/CollectionPopover.cs
 +++ b/osu.Game/Screens/Ranking/CollectionPopover.cs
 @@ -56,10 +56,10 @@ private OsuMenuItem[] items
@@ -927,7 +1463,7 @@ index 2795627b44..28d82cb57d 100644
  
 diff --git a/osu.Game/Screens/Select/BeatmapCarousel.CollectionFolders.cs b/osu.Game/Screens/Select/BeatmapCarousel.CollectionFolders.cs
 new file mode 100644
-index 0000000000..a2f7666b64
+index 0000000000..00eb1f29a5
 --- /dev/null
 +++ b/osu.Game/Screens/Select/BeatmapCarousel.CollectionFolders.cs
 @@ -0,0 +1,169 @@
@@ -1101,7 +1637,7 @@ index 0000000000..a2f7666b64
 +    }
 +}
 diff --git a/osu.Game/Screens/Select/BeatmapCarousel.cs b/osu.Game/Screens/Select/BeatmapCarousel.cs
-index 7fb8883dbc..b656d58e79 100644
+index 7fb8883dbc..dd10e91d05 100644
 --- a/osu.Game/Screens/Select/BeatmapCarousel.cs
 +++ b/osu.Game/Screens/Select/BeatmapCarousel.cs
 @@ -65,6 +65,10 @@ public partial class BeatmapCarousel : Carousel<BeatmapInfo>
@@ -1197,7 +1733,7 @@ index 7fb8883dbc..b656d58e79 100644
  
 diff --git a/osu.Game/Screens/Select/BeatmapCarouselFilterGrouping.CollectionFolders.cs b/osu.Game/Screens/Select/BeatmapCarouselFilterGrouping.CollectionFolders.cs
 new file mode 100644
-index 0000000000..dcdf8bbb53
+index 0000000000..c5a9c64904
 --- /dev/null
 +++ b/osu.Game/Screens/Select/BeatmapCarouselFilterGrouping.CollectionFolders.cs
 @@ -0,0 +1,323 @@
@@ -1525,7 +2061,7 @@ index 0000000000..dcdf8bbb53
 +    }
 +}
 diff --git a/osu.Game/Screens/Select/BeatmapCarouselFilterGrouping.cs b/osu.Game/Screens/Select/BeatmapCarouselFilterGrouping.cs
-index aaca52e297..86fc642a4f 100644
+index aaca52e297..cdb5693576 100644
 --- a/osu.Game/Screens/Select/BeatmapCarouselFilterGrouping.cs
 +++ b/osu.Game/Screens/Select/BeatmapCarouselFilterGrouping.cs
 @@ -19,7 +19,7 @@
@@ -1560,9 +2096,23 @@ index aaca52e297..86fc642a4f 100644
                  var groups = getGroups((List<CarouselItem>)items, criteria);
                  int displayedBeatmapsCount = 0;
  
+diff --git a/osu.Game/Screens/Select/CollectionDropdown.cs b/osu.Game/Screens/Select/CollectionDropdown.cs
+index 6372c31110..930cb92f29 100644
+--- a/osu.Game/Screens/Select/CollectionDropdown.cs
++++ b/osu.Game/Screens/Select/CollectionDropdown.cs
+@@ -68,7 +68,8 @@ protected override void LoadComplete()
+         {
+             base.LoadComplete();
+ 
+-            realmSubscription = realm.RegisterForNotifications(r => r.All<BeatmapCollection>().OrderBy(c => c.Name), collectionsChanged);
++            // Patchsu patch 10: only top level collections (picking one includes its sub-collections).
++            realmSubscription = realm.RegisterForNotifications(r => r.All<BeatmapCollection>().Filter("NOT Name CONTAINS $0", CollectionFolders.SEPARATOR.ToString()).OrderBy(c => c.Name), collectionsChanged);
+ 
+             Current.BindValueChanged(selectionChanged);
+         }
 diff --git a/osu.Game/Screens/Select/FilterControl.CollectionFolders.cs b/osu.Game/Screens/Select/FilterControl.CollectionFolders.cs
 new file mode 100644
-index 0000000000..ea6f881688
+index 0000000000..9ee72eba66
 --- /dev/null
 +++ b/osu.Game/Screens/Select/FilterControl.CollectionFolders.cs
 @@ -0,0 +1,56 @@
@@ -1623,7 +2173,7 @@ index 0000000000..ea6f881688
 +    }
 +}
 diff --git a/osu.Game/Screens/Select/FilterControl.cs b/osu.Game/Screens/Select/FilterControl.cs
-index a8202987de..2cacda34e4 100644
+index a8202987de..2bac88060e 100644
 --- a/osu.Game/Screens/Select/FilterControl.cs
 +++ b/osu.Game/Screens/Select/FilterControl.cs
 @@ -266,7 +266,8 @@ void debouncedUpdateCriteria()
@@ -1659,7 +2209,7 @@ index a8202987de..2cacda34e4 100644
                  criteria.UserStarDifficulty.Min = difficultyRangeSlider.LowerBound.Value;
  
 diff --git a/osu.Game/Screens/Select/FilterCriteria.cs b/osu.Game/Screens/Select/FilterCriteria.cs
-index 1c70132850..d7d67b60c8 100644
+index 1c70132850..84430e0c44 100644
 --- a/osu.Game/Screens/Select/FilterCriteria.cs
 +++ b/osu.Game/Screens/Select/FilterCriteria.cs
 @@ -116,6 +116,12 @@ public string SearchText
@@ -1676,7 +2226,7 @@ index 1c70132850..d7d67b60c8 100644
  
          /// <summary>
 diff --git a/osu.Game/Screens/Select/Panel.cs b/osu.Game/Screens/Select/Panel.cs
-index b69fc51e30..0311b5c71d 100644
+index b69fc51e30..115850b472 100644
 --- a/osu.Game/Screens/Select/Panel.cs
 +++ b/osu.Game/Screens/Select/Panel.cs
 @@ -35,6 +35,11 @@ public abstract partial class Panel : PoolableDrawable, ICarouselPanel, IHasCont
@@ -1701,7 +2251,7 @@ index b69fc51e30..0311b5c71d 100644
                  if (this is PanelBeatmap || this is PanelBeatmapStandalone)
                      x += active_x_offset * 2;
 diff --git a/osu.Game/Screens/Select/PanelBeatmapSet.cs b/osu.Game/Screens/Select/PanelBeatmapSet.cs
-index 87a85cf85d..b9d98382be 100644
+index 87a85cf85d..57bcd2d74d 100644
 --- a/osu.Game/Screens/Select/PanelBeatmapSet.cs
 +++ b/osu.Game/Screens/Select/PanelBeatmapSet.cs
 @@ -264,11 +264,10 @@ public override MenuItem[] ContextMenuItems
@@ -1722,7 +2272,7 @@ index 87a85cf85d..b9d98382be 100644
                      collectionItems.Add(new OsuMenuItem(LocalisableString.Interpolate($@"{CommonStrings.Manage}..."), MenuItemType.Standard, manageCollectionsDialog.Show));
 diff --git a/osu.Game/Screens/Select/PanelCollectionFolder.cs b/osu.Game/Screens/Select/PanelCollectionFolder.cs
 new file mode 100644
-index 0000000000..8985a4d30c
+index 0000000000..a0a4262018
 --- /dev/null
 +++ b/osu.Game/Screens/Select/PanelCollectionFolder.cs
 @@ -0,0 +1,416 @@
@@ -2143,7 +2693,7 @@ index 0000000000..8985a4d30c
 +    }
 +}
 diff --git a/osu.Game/Screens/Select/SongSelect.cs b/osu.Game/Screens/Select/SongSelect.cs
-index bc01c31758..e5cb07c5e7 100644
+index bc01c31758..96618eb001 100644
 --- a/osu.Game/Screens/Select/SongSelect.cs
 +++ b/osu.Game/Screens/Select/SongSelect.cs
 @@ -1252,10 +1252,10 @@ public virtual IEnumerable<OsuMenuItem> GetForwardActions(BeatmapInfo beatmap)

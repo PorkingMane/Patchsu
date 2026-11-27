@@ -1,5 +1,159 @@
 Changelog go in patch numerical order, so 0001 will be first and 1000 will be last unless its a breaking change.
 
+## 2026-11-28 · 0003 PP sort and leaderboard tooltip follow PP option changes
+
+- **0003** `LeaderboardManager.FetchWithCriteria`: fetching the same criteria again clears `calculatedPerformance`, so the PP sort
+  recalculates plays without saved PP after a PP option changes (0009 "Remove 'No Fail' from PP calculation" kept the PP from when
+  it was on). Switching beatmaps keeps the cache. `LeaderboardScoreTooltip.SetContent` compares by reference: a re-fetched score
+  has the same ID, so the tooltip kept the old PP until another score was hovered.
+- Not fixed: while NF is ignored, the PP sort still uses a NF play's *saved* PP (with NF); 0003 doesn't know about 0009.
+- Tests: `TestSceneLeaderboardPPSortRefresh` (p3-tests, fails without the fix). Full stack builds 0 warnings.
+
+## 2026-11-28 · 0001/0002/0003 "Include ... in PP again" is green with the Target Practice icon
+
+- **0001** new `MenuItemType.Positive` (`Green1` in `DrawableOsuMenuItem`), own block after the offline parts in the header.
+- **0002** `LocalPerformanceExclusions`: already excluded difficulty / set / score gives a `Positive` item (was `Destructive`), so right-click
+  menus show "Include" green. The F3 popover buttons ("all difficulties", "this difficulty") go `Green1` with `OsuIcon.ModTargetPractice`
+  instead of the crossed-out `ModNoScope` (`exclusionColour`, picks by item type); `NO_SCOPE_ICON_SCALE` renamed `MOD_ICON_SCALE`.
+- **0003** `MenuItemType.cs` / `DrawableOsuMenuItem.cs` hunks regenerated on top of `Positive` (no code change).
+- Tests: full stack, Vanilla+, 0001+0002, 0001+0003 and 0001+1000 build 0 warnings; p2-tests, p3-tests + opt `PatchsuOptimisationTest` pass (136).
+
+## 2026-11-28 · 0003 Submenus with nested items open left when their children wouldn't fit on the right
+
+- **0003** `OsuMenu.updateSide`: a submenu the framework put on the right that has items with sub-items (`hasNestedItems`) now
+  opens left (same `X` offset as before) when the room right of it is smaller than its own width (guess for the child width) and the
+  left fits. The existing "keep going left" rule then sends its children left too, instead of the child flipping left over the
+  root menu (e.g. a sub-collection under "Collections" in the beatmap menu). Neither side fits: framework placement as before.
+- Tests: `TestNestedSubmenuWithoutRoomOnRightOpensLeft` (p3-tests `TestSceneSubmenuSide`, fails without the fix). Full stack, Vanilla+
+  and 0001+0003 build 0 warnings; p3-tests, p10-tests, opt-tests and vanilla menu tests pass (opt `DumpVariants` needs the osu ruleset tests project).
+
+## 2026-11-28 · 0009 Results screen and leaderboard PP ignore No Fail again
+
+- **0009** `PerformanceStatistic` (results) and `BeatmapLeaderboardScore.Tooltip.PerformanceStatisticRow` (leaderboard PP) showed the
+  saved `ScoreInfo.PP`, which was calculated with NF, so the `PerformanceCalculator` hook never ran for them (profiles worked, they calculate).
+  Both now skip the saved PP for NF plays while NF is ignored (`LocalNoFailPerformance.IgnoresSavedPerformance`) and calculate instead.
+  Hunks have no leading context so they apply with or without 0004.
+- Tests: `TestSceneNoFailSavedPerformance` (p9-tests). Full stack and 0001+0002+0009 build 0 warnings; all `*-tests` + opt-tests pass
+  except p500 `TestSpacingSliderShowsPreview` (unrelated).
+
+## 2026-11-28 · 0003 Music button mute / duck only resets when entering a beatmap
+
+- **0003** `ToolbarMusicButton`: removed the toolbar-hide fallback release. The toolbar also hides on other screens (opening a score),
+  which undid the mute / duck there. Now only a pushed `PlayerLoader` (gameplay, replays, spectating) releases them.
+- Tests: `TestSceneToolbarMusicButtonClicks` toolbar-hide tests replaced by `TestToolbarHidingKeepsDuckAndMute`;
+  `TestSceneMusicButtonMuteIntoGameplay` +`TestButtonDuckReleasedOnEnteringBeatmap`. Full stack and Vanilla+ build 0 warnings;
+  p3-tests + opt-tests pass (opt `DumpVariants` needs the osu ruleset tests project).
+
+## 2026-11-28 · 0003 Music button mute no longer triggers the "music muted" warning
+
+- **0003** `ToolbarMusicButton` releases its mute / duck on `OsuGame.ScreenStack.ScreenPushed` when the new screen is a
+  `PlayerLoader` (fires before the loader loads, so before `showMuteWarningIfNeeded`). Before, it waited for the toolbar to hide,
+  which on the first entry only happens when `Player` is pushed, after the warning. Toolbar-hide release kept as a fallback.
+  A 0 music volume set in settings still warns.
+- Tests: `TestSceneMusicButtonMuteIntoGameplay` (p3-tests, Navigation; resets `MutedAudioNotificationShownOnce`, which
+  `OsuGameTestScene` sets to true). Fails without the fix. Full stack, Vanilla+ and 0001+0003 build 0 warnings; all `*-tests`
+  + opt-tests pass except p500 `TestSpacingSliderShowsPreview` (unrelated).
+
+## 2026-11-28 · 0003 Tighter F3 Options menu, 0 / - / + hotkeys
+
+- **0003** `FooterButtonOptions.Popover`: `OptionButton` 265×34 (was 50, corner radius 7), flow spacing 2, header padding 5 vertical,
+  spacers 5. `OnKeyDown` maps `Number0` / `Minus` / `Plus` to options 10–12 (after 1–9).
+- Tests: `TestSceneOptionsPopoverHotkeys` (p3-tests). Full stack builds 0 warnings; it, `TestSceneLookForSimilar`,
+  `TestScenePerformanceSimulation` and song select options tests pass.
+
+## 2026-11-28 · 0003 Look for similar icon, see-through menu scrollbar
+
+- **0003** F3 Options "Look for similar" is light blue (like the right-click menu) and uses the Random V2 mod icon
+  (`OsuIcon.LookForSimilar`, own copy `Textures/Icons/Patchsu/look-for-similar.png`, cropped square so it's not tiny; 0003 doesn't
+  need 0500). Embedded through a "Patchsu icons" csproj `ItemGroup` and a `DllResourceStore` in `InitialiseFonts`.
+- **0003** `OsuMenu` scrollbar at 0.5 alpha so it no longer hides the submenu arrow.
+- Tests: `TestSceneLookForSimilar.TestOptionsPopoverIconAndColour`. Full stack, Vanilla+ and 0001+0003 build 0 warnings; all
+  `*-tests` + opt-tests pass except p500 `TestSpacingSliderShowsPreview` (0500 RandomV2 description, unrelated).
+
+## 2026-11-28 · 0003 Toolbar music button: middle-click mutes music volume, right-click ducks
+
+- **0003** `ToolbarMusicButton`: middle-click now sets `audio.VolumeTrack` to 0 and back to the value before (not saved across
+  restarts) instead of adding a 0 volume adjustment to `audio.Tracks`. The icon shows `FontAwesome.Solid.VolumeMute` whenever the
+  music volume is 0 (also when set to 0 in settings). Right-click toggles `MusicController.Duck` (same parameters as
+  `ManageCollectionsDialog`); the icon / volume bar dim (0.35) moved from muting to ducking. Duck is released on dispose and when
+  the parent `Toolbar` hides (entering gameplay), so it doesn't carry into a beatmap. A middle-click mute is undone there too
+  (only if the button muted it and the volume wasn't changed since). Mute and duck are exclusive: muting releases the duck,
+  ducking while the music volume is 0 restores it first (otherwise `SetIcon` re-showed the icon at full alpha while still ducked).
+- **0003** New setting `Interface.SwapMusicButtonClicks` (Patch 3 subsection, "Swap middle and right click on the music button").
+- Tests: `TestSceneToolbarMusicButtonClicks` (p3-tests, uses a real `Toolbar`). Full stack and Vanilla+ build 0 warnings.
+
+## 2026-11-28 · 0010 Move collections by dragging in Manage collections
+
+- **0010** The right mouse drag (hold 500 ms) also moves: top quarter of a row (or half the gap above it) = next to that row
+  (`MoveFolderInto(row path[..^1])`), bottom quarter = inside it (`MoveFolderInto(row path)`), middle = merge as before. A 3 px rounded
+  yellow line (above the drag preview) shows where it lands, indented by `FOLDER_INDENT` (25, now also used for the row indent) for
+  "inside". No line / border when it would land inside itself or where it already is. Sub-collections move along.
+- Tests: `TestSceneManageCollectionFolders` +2 (bottom edge moves inside with sub-collections and beatmaps, top edge moves to top level,
+  no line on its own parent).
+
+## 2026-11-28 · 0500 RandomV2 spacing previews
+
+- **0500** Jump spacing and Stream spacing sliders show the rhythm-row preview (with the current value) instead of a bare
+  number, updating while dragging.
+- **0500** Exponential jumps / streams previews say "Only works when … spacing is above 1.0x" while it is 1.0x or lower
+  (the formula returns the distance unchanged there, so toggling it showed no change).
+- **0500** Fixed: moving the cursor between pattern checkboxes passed over 4px gaps that showed the "Patterns" text tooltip.
+- **0500** Previews always animate when the hovered setting changes: circles both shapes share slide, extra ones grow out of
+  the last circle or shrink into it, lines follow, the box resizes and row labels crossfade. Before, only previews with the
+  same circle count animated and the rest snapped.
+- Checked: full stack 0 warnings; osu ruleset tests 41/41 (4 new in `p500-tests`); screenshots of the new previews and of
+  transitions mid-animation.
+
+## 2026-11-27 · 0003 "Look for similar" in the beatmap right-click menu
+
+- **0003** New `MenuItemType.External` (light blue, `OsuColour.BlueLight`). `SongSelect.CreateLookForSimilarMenuItem` is added under
+  "Copy link" in `SongSelect` and `SoloSongSelect.GetForwardActions` when `OnlineID > 0`: opens bobert-web recommendations for the
+  difficulty (`LinkWarnMode.NeverWarn`) and posts a `SimpleNotification`. The F3 Options popover shows it white: colouring it there
+  would change the `addButton` line 0006 uses as context.
+- Tests: `TestSceneLookForSimilar` (p3-tests).
+
+## 2026-11-27 · 0003 Submenus keep opening to the left
+
+- **0003** `OsuMenu.updateSide` (after `base.Update`): the framework (`Menu.Update`) picks each submenu's side alone (right unless only
+  left fits), so a narrow submenu under a left-opened one jumped right over its parents. If the parent `OsuMenu` opened left
+  (framework `x2` origin on its submenu container, or our own offset) and the framework put this one right, set
+  `X = -(triggeringItem.DrawWidth + DrawWidth)` when the left fits. Triggering item = the parent's item in `MenuItemState.Selected`.
+  Moving the menu's own `X` (not the parent's submenu container) keeps the framework's `positionLayout` valid.
+- Tests: `TestSceneSubmenuSide` (p3-tests; vanilla `OsuMenu` fails `TestNarrowSubmenuKeepsGoingLeft`).
+
+## 2026-11-27 · 0010 Merge collections in Manage collections, top level only collection dropdown
+
+- **0010** Song select `CollectionDropdown` lists only top level collections (realm query `NOT Name CONTAINS '/'`); picking one
+  already includes its sub-collections.
+- **0010** Manage collections dialog: its rounded mask moved to an inner `Content` container with an `OsuContextMenuContainer` around it,
+  so menus and submenus can draw past the dialog's edges (a menu swallows mouse down, so clicking one outside doesn't close the dialog). `DrawableCollectionListItem` is `IHasContextMenu`:
+  "Merge into" (own tree builder, a folder with sub-collections opens a submenu that starts with its own collection; excludes the
+  row itself and its sub-collections), "Rename" (`FocusName`), "New sub-collection" (same as "+").
+- **0010** Right mouse down on a row is handled by the row: released before 500 ms it opens the menu (`TriggerEvent` of a right
+  `MouseDownEvent` on the context menu container); held 500 ms starts a merge drag in `DrawableCollectionList` (right button has no
+  framework drag, so the list follows the mouse in `Update` only while dragging). Preview = Box + 2 texts at 50 % alpha, the target
+  row's name box gets the focused-textbox border. Release over a valid row merges, anywhere else cancels.
+- **0010** `CollectionFolders.MergeInto(realm, folder, targetId)`: beatmaps of the folder and all its sub-collections go into the target
+  (flattened), the folder's collections are removed. `MergeIntoParent` shares the helper.
+- New files: `Collections/DrawableCollectionList.CollectionFolders.cs`, `Collections/DrawableCollectionListItem.CollectionFolders.cs`.
+- Tests: `TestSceneManageCollectionFolders` (+5: menu on release, merge from menu flattens, menu item outside the dialog, hold-drag merges,
+  release outside cancels),
+  `TestSceneSongSelectCollectionFolders.TestCollectionDropdownShowsTopLevelOnly`.
+
+## 2026-11-27 · 0002 "Exclude from PP" menu items are red
+
+- **0002** Every exclude / include PP menu item (difficulty, beatmap set, score sub-menu and its items) uses
+  `MenuItemType.Destructive` instead of `Standard`, like the other big-change items below it.
+- **0002** Song select options menu: "Exclude all difficulties from PP" (red) above Delete under "For all difficulties"
+  (new `FooterButtonOptions.Popover.cs` hunk, `CreateBeatmapSetMenuItem(..., allDifficulties: true)`); "Exclude this difficulty
+  from PP" shows red under "For selected difficulty" through the forwarded actions. Both use the No Scope mod icon
+  (`OsuIcon.ModNoScope`), also in the right-click menus.
+- **0002** Options menu: "Exclude this difficulty from PP" sits right after "Edit" (the popover moves the
+  `LocalPerformanceExclusions.BeatmapMenuItem` before the first spacer). Right-click menu: right after "Clear all local scores",
+  before "Hide". No Scope icon drawn at x1.9 in the options menu (`addButton(..., iconScale)`), measured against the pencil icon
+  (mod glyphs have more empty space).
+- Checked: full stack and 0001+0002 alone 0 warnings, `PatchsuOptimisationTest` + Bancho tests 22/22 on the full stack.
+
 ## 2026-11-27 · 0002 Fetched osu! plays don't keep osu!'s PP
 
 - **0002** Fix: plays fetched from osu! without a replay kept osu!'s own `pp` (`SoloScoreInfo.ToScoreInfo` copies it into
@@ -37,6 +191,24 @@ Changelog go in patch numerical order, so 0001 will be first and 1000 will be la
 - Redrawn Decoy Circles and No Sliding once more; No Sliding at x1.33 (0.95 of the earlier x1.4).
 - Checked: each of 0500/0501/0502 on 0001 alone, every pair and all three apply and build with 0 warnings (without 0005 too);
   full stack 0 warnings; Mafham / Click Control / replay toggle / opt tests pass; a scratch test confirms every icon texture resolves.
+
+## 2026-11-27 · 0500 RandomV2 settings tidied, hover previews
+
+- **0500** RandomV2 settings in a fixed order: Jump spacing, Exponential jumps, Stream spacing, Exponential streams, Stream
+  threshold (was Aim/Stream Divisor), Remove stacks, Angle style, Jump / Stream sharpness, Pattern mode, Patterns, Mirrored
+  responses, Progressive spacing, Seed. Descriptions rewritten.
+- **0500** "Angle style" dropdown (Random / Star / 45° / 90°) replaces the "Custom angle" toggle and the "Custom" angle.
+  Patterns no longer need a toggle first. The saved settings (`CustomAngle`, `Angle`, masks) are unchanged, so old scores and
+  replays give the same maps; presets with patterns selected but Custom angle off have the unused selection cleared once.
+- **0500** Sharpness sliders now show whenever angles are random (they were hidden in the default mode while still used).
+  "Pattern mode" (same list for all notes / per note type) copies the selection when switching. Mirrored responses and
+  Progressive spacing only show once a pattern is selected.
+- **0500** Hover previews with hit circles (Torus numbers): rhythm rows coloured stream / jump for the Exponential toggles and
+  Stream threshold (live while dragging), angle path for Angle style and sharpness, each pattern's shape, mirrored pair,
+  Remove stacks. Fixed: the Exponential tooltips ignored their setting's description.
+- Checked: `RitsuVariantOutputTest` dump byte-identical before / after (0500 alone and full stack); new
+  `p500-tests/TestSceneOsuModRandomV2Settings` 5/5, p502 + opt osu tests 37/37 on the full stack. 0500 alone and full stack
+  0 warnings. Screenshots on black, light and coloured backgrounds.
 
 ## 2026-11-27 · 0002b P2P multiplayer lobby (LAN test)
 

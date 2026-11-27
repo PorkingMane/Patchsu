@@ -3,12 +3,15 @@
 Before making changes for a feature request, say in one sentence how it differs from vanilla osu!lazer; if it adds new UI behaviour or settings, ask before implementing.
 Do not overengineer things and stay true to how actual osu!lazer code is structured, try to implement solutions as simple and minimal as possible if possible; If not, then make sure that performance difference is comparable to actual osu!lazer features in same degree of complexity (Local Profiles should try to not do more drawcalls than actual profile view osu!lazer has for example). Your utmost priority is to keep the game stable and in-line with actual lazer interface as close as possible, because we are patching on top and reusing it assets. 
 If user ask for ambigous features, question them how they can see it and if they can explain it more detailed, as well as if they have a rough draft they can show you visually. Do not try to implement things with one-liners that sound too big, refuse until user elaborates.
-Do not overexplain things, keep language straight and simple while you can. User ask you to implement features, not to sugarcoat and talk a lot
+Do not overexplain things, keep language straight and simple while you can. User ask you to implement features, not to sugarcoat and talk a lot.
+
+If user end things with a question mark, answer the question instead of implementing things or suggest how to implement them
 
 Abbreviated words that might be used in conversation:
 EGR - Estimated Global Rank/Ranking
 LP - Local Profile
 BC - Beatmap Carousel
+RMB/LMB/MMB - Right/Left/Middle mouse button(s) respectfully
 
 ## TL;DR
 

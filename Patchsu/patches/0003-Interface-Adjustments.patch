@@ -1,3 +1,154 @@
+diff --git a/osu.Game/Graphics/OsuIcon.cs b/osu.Game/Graphics/OsuIcon.cs
+index 1135b21114..e0c245cd84 100644
+--- a/osu.Game/Graphics/OsuIcon.cs
++++ b/osu.Game/Graphics/OsuIcon.cs
+@@ -25,6 +25,9 @@ public static class OsuIcon
+         public static IconUsage RulesetTaiko => get(OsuIconMapping.RulesetTaiko);
+ 
+         public static IconUsage Logo => get(OsuIconMapping.Logo);
++
++        // Patchsu: "Look for similar" (the Random V2 mod icon, embedded in osu.Game).
++        public static IconUsage LookForSimilar => get(OsuIconMapping.LookForSimilar);
+         public static IconUsage EditCircle => get(OsuIconMapping.EditCircle);
+         public static IconUsage LeftCircle => get(OsuIconMapping.LeftCircle);
+         public static IconUsage RightCircle => get(OsuIconMapping.RightCircle);
+@@ -218,6 +221,9 @@ private enum OsuIconMapping
+             [Description(@"Logo")]
+             Logo,
+ 
++            [Description(@"Patchsu/look-for-similar")]
++            LookForSimilar,
++
+             [Description(@"RulesetOsu")]
+             RulesetOsu,
+ 
+diff --git a/osu.Game/Graphics/UserInterface/DrawableOsuMenuItem.cs b/osu.Game/Graphics/UserInterface/DrawableOsuMenuItem.cs
+index e2330ef401..6d9880afae 100644
+--- a/osu.Game/Graphics/UserInterface/DrawableOsuMenuItem.cs
++++ b/osu.Game/Graphics/UserInterface/DrawableOsuMenuItem.cs
+@@ -105,6 +105,10 @@ private void updateText()
+                 case MenuItemType.Positive:
+                     text.Colour = colours.Green1;
+                     break;
++
++                case MenuItemType.External:
++                    text.Colour = colours.BlueLight;
++                    break;
+             }
+ 
+             hotkey.Hotkey = osuMenuItem?.Hotkey ?? default;
+diff --git a/osu.Game/Graphics/UserInterface/MenuItemType.cs b/osu.Game/Graphics/UserInterface/MenuItemType.cs
+index 051fc64bb5..3d39343685 100644
+--- a/osu.Game/Graphics/UserInterface/MenuItemType.cs
++++ b/osu.Game/Graphics/UserInterface/MenuItemType.cs
+@@ -13,5 +13,10 @@ public enum MenuItemType
+         /// Patchsu: green, for items that undo a destructive one (e.g. including a beatmap in PP again).
+         /// </summary>
+         Positive,
++
++        /// <summary>
++        /// Patchsu: light blue, for items that open an outside site.
++        /// </summary>
++        External,
+     }
+ }
+diff --git a/osu.Game/Graphics/UserInterface/OsuMenu.cs b/osu.Game/Graphics/UserInterface/OsuMenu.cs
+index 11d9000dfa..4647d4e7a2 100644
+--- a/osu.Game/Graphics/UserInterface/OsuMenu.cs
++++ b/osu.Game/Graphics/UserInterface/OsuMenu.cs
+@@ -63,6 +63,65 @@ protected override void Update()
+                 if (drawableItem is DrawableOsuMenuItem osuItem)
+                     osuItem.ShowCheckbox.Value = showCheckboxes;
+             }
++
++            updateSide();
++        }
++
++        /// <summary>
++        /// Patchsu: whether this submenu is shown to the left of the item that opened it.
++        /// </summary>
++        private bool openedLeft;
++
++        /// <summary>
++        /// Patchsu: the framework picks each submenu's side by itself (right, unless only the left fits), so a narrow submenu
++        /// opened from one that went left jumps back to the right over its parents. Keep going left while it fits there.
++        /// A submenu with nested items that leaves no room on its right for them (guessed as its own width) opens left from the start,
++        /// so the whole chain goes one way instead of the nested ones flipping back over it.
++        /// Only <see cref="Drawable.X"/> of this menu is moved, so the framework's own placement stays valid.
++        /// </summary>
++        private void updateSide()
++        {
++            if (State != MenuState.Open || Parent is not Container<Menu> submenuContainer || submenuContainer.Parent is not OsuMenu parentMenu
++                || parentMenu.Direction != Direction.Vertical)
++                return;
++
++            bool frameworkLeft = (submenuContainer.Origin & Anchor.x2) != 0;
++            float offset = 0;
++
++            if (!frameworkLeft && (parentMenu.openedLeft || hasNestedItems()))
++            {
++                DrawableMenuItem triggeringItem = null;
++
++                foreach (var item in parentMenu.ItemsContainer)
++                {
++                    if (item.State == MenuItemState.Selected)
++                    {
++                        triggeringItem = item;
++                        break;
++                    }
++                }
++
++                var inputManager = GetContainingInputManager();
++
++                if (triggeringItem != null && inputManager != null && triggeringItem.ToSpaceOfOtherDrawable(new Vector2(-DrawWidth, 0), inputManager).X > 0
++                    && (parentMenu.openedLeft
++                        || triggeringItem.ToSpaceOfOtherDrawable(new Vector2(triggeringItem.DrawWidth + DrawWidth * 2, 0), inputManager).X > inputManager.DrawWidth))
++                    offset = -(triggeringItem.DrawWidth + DrawWidth);
++            }
++
++            X = offset;
++            openedLeft = frameworkLeft || offset < 0;
++        }
++
++        private bool hasNestedItems()
++        {
++            foreach (var item in ItemsContainer)
++            {
++                if (item.Item.Items.Count > 0)
++                    return true;
++            }
++
++            return false;
+         }
+ 
+         protected override void AnimateOpen()
+@@ -122,7 +181,25 @@ protected override DrawableMenuItem CreateDrawableMenuItem(MenuItem item)
+             return new DrawableOsuMenuItem(item);
+         }
+ 
+-        protected override ScrollContainer<Drawable> CreateScrollContainer(Direction direction) => new OsuScrollContainer(direction);
++        protected override ScrollContainer<Drawable> CreateScrollContainer(Direction direction) => new MenuScrollContainer(direction);
++
++        /// <summary>
++        /// Patchsu: a half see-through scrollbar, so the submenu arrows under it stay visible.
++        /// </summary>
++        private partial class MenuScrollContainer : OsuScrollContainer
++        {
++            public MenuScrollContainer(Direction direction)
++                : base(direction)
++            {
++            }
++
++            protected override ScrollbarContainer CreateScrollbar(Direction direction)
++            {
++                var scrollbar = base.CreateScrollbar(direction);
++                scrollbar.Child.Alpha = 0.5f;
++                return scrollbar;
++            }
++        }
+ 
+         protected override Menu CreateSubMenu() => new OsuMenu(Direction.Vertical)
+         {
 diff --git a/osu.Game/Graphics/UserInterface/ShearedRangeSlider.cs b/osu.Game/Graphics/UserInterface/ShearedRangeSlider.cs
 index 417474cba3..588cc01f4e 100644
 --- a/osu.Game/Graphics/UserInterface/ShearedRangeSlider.cs
@@ -305,10 +456,10 @@ index 0000000000..4662580743
 +}
 diff --git a/osu.Game/LocalPriority/LocalInterfaceSettings.cs b/osu.Game/LocalPriority/LocalInterfaceSettings.cs
 new file mode 100644
-index 0000000000..a3ae7c8ce4
+index 0000000000..6813502d75
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalInterfaceSettings.cs
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,60 @@
 +// Patched for fun and personal needs. I suggest playing osu!lazer instead of this client. All modifications are done with AI from personal interest.
 +// Peppy openly stated that he does not like using AI and we completely respect it. I only do it for research purposes and to see what features I would love in lazer.
 +// To use it you'll need to compile it on your PC using provided .sh / .cmd files.
@@ -336,12 +487,17 @@ index 0000000000..a3ae7c8ce4
 +
 +        protected override string Summary => @"Interface Improvements";
 +
-+        public override IEnumerable<LocalisableString> FilterTerms => base.FilterTerms.Concat(new LocalisableString[] { @"skip", @"break" });
++        public override IEnumerable<LocalisableString> FilterTerms => base.FilterTerms.Concat(new LocalisableString[] { @"skip", @"break", @"music", @"mute", @"duck" });
 +
 +        /// <summary>
 +        /// Whether solo plays and replays show a skip button in breaks that have more than 3 seconds left.
 +        /// </summary>
 +        public static Bindable<bool> GetSkipBreaks() => PatchsuSettings.Current.GetBindable(@"Interface", @"SkipBreaks", true);
++
++        /// <summary>
++        /// Whether the toolbar music button mutes on right-click and ducks on middle-click, instead of the other way around.
++        /// </summary>
++        public static Bindable<bool> GetSwapMusicButtonClicks() => PatchsuSettings.Current.GetBindable(@"Interface", @"SwapMusicButtonClicks", false);
 +
 +        [BackgroundDependencyLoader]
 +        private void load()
@@ -354,12 +510,18 @@ index 0000000000..a3ae7c8ce4
 +                    HintText = @"Shows the skip button in breaks during solo plays and replays. Skipping leaves 3 seconds of the break.",
 +                    Current = GetSkipBreaks(),
 +                }),
++                new SettingsItemV2(new FormCheckBox
++                {
++                    Caption = @"Swap middle and right click on the music button",
++                    HintText = @"By default, middle-clicking the toolbar music button mutes the music and right-clicking muffles it.",
++                    Current = GetSwapMusicButtonClicks(),
++                }),
 +            };
 +        }
 +    }
 +}
 diff --git a/osu.Game/Online/Leaderboards/LeaderboardManager.cs b/osu.Game/Online/Leaderboards/LeaderboardManager.cs
-index d4a258a307..d94fd5e646 100644
+index d4a258a307..a21dad5c67 100644
 --- a/osu.Game/Online/Leaderboards/LeaderboardManager.cs
 +++ b/osu.Game/Online/Leaderboards/LeaderboardManager.cs
 @@ -5,6 +5,8 @@
@@ -386,15 +548,23 @@ index d4a258a307..d94fd5e646 100644
          /// <summary>
          /// Fetch leaderboard content with the new criteria specified in the background.
          /// On completion, <see cref="Scores"/> will be updated with the results from this call (unless a more recent call with a different criteria has completed).
-@@ -59,6 +69,7 @@ public void FetchWithCriteria(LeaderboardCriteria newCriteria, bool forceRefresh
+@@ -58,7 +68,15 @@ public void FetchWithCriteria(LeaderboardCriteria newCriteria, bool forceRefresh
+             if (!forceRefresh && CurrentCriteria?.Equals(newCriteria) == true && scores.Value?.FailState == null)
                  return;
  
++            // Patchsu: the same leaderboard fetched again on purpose (a PP option changed, a new play): PP calculated for the PP sort may be outdated.
++            if (CurrentCriteria?.Equals(newCriteria) == true)
++            {
++                lock (calculatedPerformance)
++                    calculatedPerformance.Clear();
++            }
++
              CurrentCriteria = newCriteria;
 +            performanceCancellation?.Cancel();
              localScoreSubscription?.Dispose();
              inFlightOnlineRequest?.Cancel();
              scores.Value = null;
-@@ -84,9 +95,6 @@ public void FetchWithCriteria(LeaderboardCriteria newCriteria, bool forceRefresh
+@@ -84,9 +102,6 @@ public void FetchWithCriteria(LeaderboardCriteria newCriteria, bool forceRefresh
  
                  default:
                  {
@@ -404,7 +574,7 @@ index d4a258a307..d94fd5e646 100644
                      if (!api.IsLoggedIn)
                      {
                          scores.Value = LeaderboardScores.Failure(LeaderboardFailState.NotLoggedIn);
-@@ -134,22 +142,25 @@ public void FetchWithCriteria(LeaderboardCriteria newCriteria, bool forceRefresh
+@@ -134,22 +149,25 @@ public void FetchWithCriteria(LeaderboardCriteria newCriteria, bool forceRefresh
                          if (inFlightOnlineRequest != null && !newRequest.Equals(inFlightOnlineRequest))
                              return;
  
@@ -443,7 +613,7 @@ index d4a258a307..d94fd5e646 100644
                      };
                      newRequest.Failure += ex =>
                      {
-@@ -192,10 +203,90 @@ private void localScoresChanged(IRealmCollection<ScoreInfo> sender, ChangeSet? c
+@@ -192,10 +210,90 @@ private void localScoresChanged(IRealmCollection<ScoreInfo> sender, ChangeSet? c
                  }
              }
  
@@ -478,7 +648,9 @@ index d4a258a307..d94fd5e646 100644
 +                scores.Value = createResult(unsorted.OrderByCriteria(criteria.Sorting, criteria.SortReversed).ToArray());
 +            }), CancellationToken.None);
 +        }
-+
+ 
+-            var newScoresArray = newScores.ToArray();
+-            scores.Value = LeaderboardScores.Success(newScoresArray, scoresRequested: newScoresArray.Length, totalScores: newScoresArray.Length, null);
 +        private async Task fillPerformance(IEnumerable<ScoreInfo> scoresToFill, CancellationToken cancellationToken)
 +        {
 +            foreach (var score in scoresToFill.Where(s => s.PP == null))
@@ -523,9 +695,7 @@ index d4a258a307..d94fd5e646 100644
 +                {
 +                    Logger.Log($@"Patchsu: could not calculate PP for leaderboard sorting: {e.Message}");
 +                }
- 
--            var newScoresArray = newScores.ToArray();
--            scores.Value = LeaderboardScores.Success(newScoresArray, scoresRequested: newScoresArray.Length, totalScores: newScoresArray.Length, null);
++
 +                // The difficulty cache returns null (doesn't throw) when cancelled: never keep that as the score having no PP.
 +                cancellationToken.ThrowIfCancellationRequested();
 +
@@ -537,7 +707,7 @@ index d4a258a307..d94fd5e646 100644
          }
  
          protected override void Dispose(bool isDisposing)
-@@ -203,6 +294,7 @@ protected override void Dispose(bool isDisposing)
+@@ -203,6 +301,7 @@ protected override void Dispose(bool isDisposing)
              base.Dispose(isDisposing);
  
              localScoreSubscription?.Dispose();
@@ -545,7 +715,7 @@ index d4a258a307..d94fd5e646 100644
          }
      }
  
-@@ -211,7 +303,8 @@ public record LeaderboardCriteria(
+@@ -211,7 +310,8 @@ public record LeaderboardCriteria(
          RulesetInfo? Ruleset,
          BeatmapLeaderboardScope Scope,
          Mod[]? ExactMods,
@@ -578,16 +748,64 @@ index 2f2418763d..50ae51be00 100644
          [LocalisableDescription(typeof(BeatmapLeaderboardWedgeStrings), nameof(BeatmapLeaderboardWedgeStrings.Accuracy))]
          Accuracy,
  
+diff --git a/osu.Game/OsuGameBase.cs b/osu.Game/OsuGameBase.cs
+index 948a5cf4de..d331c1fc8c 100644
+--- a/osu.Game/OsuGameBase.cs
++++ b/osu.Game/OsuGameBase.cs
+@@ -507,6 +507,9 @@ protected virtual void InitialiseFonts()
+             AddFont(Resources, @"Fonts/Noto/Noto-Hangul");
+             AddFont(Resources, @"Fonts/Noto/Noto-Thai");
+ 
++            // Patchsu icons are embedded in this assembly.
++            Resources.AddStore(new DllResourceStore(typeof(OsuGameBase).Assembly));
++
+             AddFont(Resources, @"Fonts/Venera/Venera-Light");
+             AddFont(Resources, @"Fonts/Venera/Venera-Bold");
+             AddFont(Resources, @"Fonts/Venera/Venera-Black");
 diff --git a/osu.Game/Overlays/Toolbar/ToolbarMusicButton.cs b/osu.Game/Overlays/Toolbar/ToolbarMusicButton.cs
-index e6ffc1ad5e..8c92821901 100644
+index e6ffc1ad5e..bc539fe9fb 100644
 --- a/osu.Game/Overlays/Toolbar/ToolbarMusicButton.cs
 +++ b/osu.Game/Overlays/Toolbar/ToolbarMusicButton.cs
-@@ -73,12 +73,39 @@ private void load(NowPlayingOverlay music)
+@@ -3,6 +3,7 @@
+ 
+ #nullable disable
+ 
++using System;
+ using osu.Framework.Allocation;
+ using osu.Framework.Audio;
+ using osu.Framework.Bindables;
+@@ -10,10 +11,14 @@
+ using osu.Framework.Graphics;
+ using osu.Framework.Graphics.Containers;
+ using osu.Framework.Graphics.Shapes;
++using osu.Framework.Graphics.Sprites;
+ using osu.Framework.Graphics.Transforms;
+ using osu.Framework.Input.Events;
++using osu.Framework.Screens;
+ using osu.Framework.Threading;
+ using osu.Game.Input.Bindings;
++using osu.Game.LocalPriority;
++using osu.Game.Screens.Play;
+ using osuTK.Graphics;
+ using osuTK.Input;
+ 
+@@ -73,12 +78,130 @@ private void load(NowPlayingOverlay music)
          private IBindable<double> globalVolume;
          private Container volumeDisplay;
  
-+        // Patchsu: middle-clicking the button mutes (and unmutes) all music.
-+        private readonly BindableDouble musicMuteAdjustment = new BindableDouble(1);
++        // Patchsu: middle-clicking the button mutes (and unmutes) the music volume, right-clicking ducks the music.
++        private IBindable<double> trackVolume;
++        private double volumeBeforeMute = 1;
++        private bool mutedByButton;
++        private bool showingMuted;
++        private IDisposable duckOperation;
++        private readonly IBindable<bool> swapClicks = LocalInterfaceSettings.GetSwapMusicButtonClicks();
++
++        [Resolved(canBeNull: true)]
++        private MusicController musicController { get; set; }
++
++        [Resolved(canBeNull: true)]
++        private OsuGame game { get; set; }
 +
          protected override void LoadComplete()
          {
@@ -596,29 +814,109 @@ index e6ffc1ad5e..8c92821901 100644
              globalVolume = audio.Volume.GetBoundCopy();
              globalVolume.BindValueChanged(v => volumeBar.ResizeHeightTo((float)v.NewValue, 200, Easing.OutQuint), true);
 +
-+            audio.Tracks.AddAdjustment(AdjustableProperty.Volume, musicMuteAdjustment);
++            trackVolume = audio.VolumeTrack.GetBoundCopy();
++            trackVolume.BindValueChanged(v =>
++            {
++                bool muted = v.NewValue == 0;
++
++                if (!muted)
++                    mutedByButton = false;
++
++                if (muted != showingMuted && StateContainer is INamedOverlayComponent named)
++                {
++                    showingMuted = muted;
++                    SetIcon(muted ? FontAwesome.Solid.VolumeMute : named.Icon);
++                }
++            }, true);
++
++            // don't carry the duck or the mute into gameplay (or a replay). Release them as soon as the player loader is pushed
++            // (before it warns about muted music), not on other screens that hide the toolbar (e.g. opening a score).
++            if (game?.ScreenStack != null)
++                game.ScreenStack.ScreenPushed += onScreenPushed;
++        }
++
++        private void onScreenPushed(IScreen lastScreen, IScreen newScreen)
++        {
++            if (newScreen is PlayerLoader)
++                releaseForGameplay();
++        }
++
++        private void releaseForGameplay()
++        {
++            setDucked(false);
++
++            if (mutedByButton)
++                audio.VolumeTrack.Value = volumeBeforeMute;
 +        }
 +
 +        protected override bool OnMouseDown(MouseDownEvent e)
 +        {
-+            if (e.Button == MouseButton.Middle)
-+            {
-+                bool muted = musicMuteAdjustment.Value == 0;
-+                musicMuteAdjustment.Value = muted ? 1 : 0;
++            MouseButton button = e.Button;
 +
-+                // dim the icon and the volume bar while music is muted.
-+                IconContainer.FadeTo(muted ? 1 : 0.35f, 200, Easing.OutQuint);
-+                volumeDisplay.FadeTo(muted ? 1 : 0.35f, 200, Easing.OutQuint);
-+                return true;
++            // Patchsu settings can swap what middle and right click do.
++            if (swapClicks.Value && button is MouseButton.Middle or MouseButton.Right)
++                button = button == MouseButton.Middle ? MouseButton.Right : MouseButton.Middle;
++
++            switch (button)
++            {
++                case MouseButton.Middle:
++                    if (audio.VolumeTrack.Value > 0)
++                    {
++                        // muting and ducking replace each other.
++                        setDucked(false);
++                        volumeBeforeMute = audio.VolumeTrack.Value;
++                        audio.VolumeTrack.Value = 0;
++                        mutedByButton = true;
++                    }
++                    else
++                        audio.VolumeTrack.Value = volumeBeforeMute;
++
++                    return true;
++
++                case MouseButton.Right:
++                    if (duckOperation == null && audio.VolumeTrack.Value == 0)
++                        audio.VolumeTrack.Value = volumeBeforeMute;
++
++                    setDucked(duckOperation == null);
++                    return true;
 +            }
 +
 +            return base.OnMouseDown(e);
 +        }
 +
++        private void setDucked(bool ducked)
++        {
++            if (ducked == (duckOperation != null))
++                return;
++
++            if (ducked)
++            {
++                duckOperation = musicController?.Duck(new DuckParameters
++                {
++                    DuckVolumeTo = 1,
++                    DuckDuration = 100,
++                    RestoreDuration = 100,
++                });
++            }
++            else
++            {
++                duckOperation.Dispose();
++                duckOperation = null;
++            }
++
++            // dim the icon and the volume bar while music is ducked.
++            float alpha = duckOperation != null ? 0.35f : 1;
++            IconContainer.FadeTo(alpha, 200, Easing.OutQuint);
++            volumeDisplay.FadeTo(alpha, 200, Easing.OutQuint);
++        }
++
 +        protected override void Dispose(bool isDisposing)
 +        {
 +            base.Dispose(isDisposing);
-+            audio?.Tracks.RemoveAdjustment(AdjustableProperty.Volume, musicMuteAdjustment);
++            duckOperation?.Dispose();
++
++            if (game?.ScreenStack != null)
++                game.ScreenStack.ScreenPushed -= onScreenPushed;
          }
  
          protected override bool OnKeyDown(KeyDownEvent e)
@@ -796,7 +1094,7 @@ index 5aa3698e9e..6996afd09e 100644
                      comparison = a.StarRating.CompareTo(b.StarRating);
                      break;
 diff --git a/osu.Game/Screens/Select/BeatmapDetailsArea.Header.cs b/osu.Game/Screens/Select/BeatmapDetailsArea.Header.cs
-index b0741b58e2..59d96d5e84 100644
+index b0741b58e2..9daacdc170 100644
 --- a/osu.Game/Screens/Select/BeatmapDetailsArea.Header.cs
 +++ b/osu.Game/Screens/Select/BeatmapDetailsArea.Header.cs
 @@ -27,7 +27,7 @@ public partial class Header : CompositeDrawable
@@ -875,6 +1173,20 @@ index f83fd1539d..d955d2b25a 100644
                          FilterBySelectedMods = { BindTarget = header.FilterBySelectedMods },
                      };
  
+diff --git a/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs b/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs
+index e1fe77f386..20d71b1c9f 100644
+--- a/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs
++++ b/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs
+@@ -79,7 +79,8 @@ private void load()
+ 
+             public void SetContent(ScoreInfo content)
+             {
+-                if (lastContent != null && lastContent.Equals(content))
++                // Patchsu: by reference, a fetched again score (same ID) can have other PP or score shown.
++                if (ReferenceEquals(lastContent, content))
+                     return;
+ 
+                 dateAndStatistics.Score = content;
 diff --git a/osu.Game/Screens/Select/BeatmapLeaderboardScore.cs b/osu.Game/Screens/Select/BeatmapLeaderboardScore.cs
 index ff34c9ef38..2dac8bef8b 100644
 --- a/osu.Game/Screens/Select/BeatmapLeaderboardScore.cs
@@ -1082,7 +1394,7 @@ index 5dd25d4846..3326cd4358 100644
          // [LocalisableDescription(typeof(SongSelectStrings), nameof(SongSelectStrings.RankAchieved))]
          // RankAchieved,
 diff --git a/osu.Game/Screens/Select/FilterControl.cs b/osu.Game/Screens/Select/FilterControl.cs
-index a8202987de..a8e0aa4f42 100644
+index a8202987de..408eb1802d 100644
 --- a/osu.Game/Screens/Select/FilterControl.cs
 +++ b/osu.Game/Screens/Select/FilterControl.cs
 @@ -45,7 +45,7 @@ public sealed partial class FilterControl : OverlayContainer
@@ -1180,10 +1492,20 @@ index 1c70132850..a45d785e75 100644
  
                  // Some sorts use aggregate max comparisons, which will change based on filtered items.
 diff --git a/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs b/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs
-index 8ed7ab585e..26caa5e6c6 100644
+index 8ed7ab585e..afbf642795 100644
 --- a/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs
 +++ b/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs
-@@ -74,6 +74,15 @@ private void load(OsuColour colours)
+@@ -54,7 +54,8 @@ private void load(OsuColour colours)
+                 {
+                     AutoSizeAxes = Axes.Both,
+                     Direction = FillDirection.Vertical,
+-                    Spacing = new Vector2(3),
++                    // Patchsu: tighter, so more options fit without a huge popover.
++                    Spacing = new Vector2(2),
+                 };
+ 
+                 addHeader(CommonStrings.General);
+@@ -74,12 +75,28 @@ private void load(OsuColour colours)
                      if (item.Items.Any())
                          continue;
  
@@ -1196,6 +1518,211 @@ index 8ed7ab585e..26caa5e6c6 100644
 +                    if (item is OsuMenuItemSpacer && buttonFlow.Children.LastOrDefault() is not OptionButton)
 +                        continue;
 +
++                    // Patchsu: light blue like in the right-click menu.
++                    if (item.Type == MenuItemType.External)
++                    {
++                        addButton(item.Text.Value, item.Icon, item.Action.Value, colours.BlueLight);
++                        continue;
++                    }
++
                      if (item is OsuMenuItemSpacer)
                      {
                          buttonFlow.Add(new Container
+                         {
+                             RelativeSizeAxes = Axes.X,
+-                            Height = 10,
++                            Height = 5,
+                         });
+                         continue;
+                     }
+@@ -107,7 +124,7 @@ private void addHeader(LocalisableString text, string? context = null)
+                 {
+                     AutoSizeAxes = Axes.Y,
+                     RelativeSizeAxes = Axes.X,
+-                    Padding = new MarginPadding(10),
++                    Padding = new MarginPadding { Horizontal = 10, Vertical = 5 },
+                 };
+ 
+                 textFlow.AddText(text, t => t.Font = OsuFont.Default.With(weight: FontWeight.SemiBold));
+@@ -148,10 +165,18 @@ protected override bool OnKeyDown(KeyDownEvent e)
+                 // don't absorb control as ToolbarRulesetSelector uses control + number to navigate
+                 if (e.ControlPressed) return false;
+ 
+-                if (!e.Repeat && e.Key >= Key.Number1 && e.Key <= Key.Number9)
++                // Patchsu: 0, - and + (=) select the 10th to 12th option.
++                int requested = e.Key switch
+                 {
+-                    int requested = e.Key - Key.Number1;
++                    >= Key.Number1 and <= Key.Number9 => e.Key - Key.Number1,
++                    Key.Number0 => 9,
++                    Key.Minus => 10,
++                    Key.Plus => 11,
++                    _ => -1,
++                };
+ 
++                if (!e.Repeat && requested >= 0)
++                {
+                     OptionButton? found = buttonFlow.Children.OfType<OptionButton>().ElementAtOrDefault(requested);
+ 
+                     if (found != null)
+@@ -171,14 +196,14 @@ private partial class OptionButton : OsuButton
+ 
+                 public OptionButton()
+                 {
+-                    Size = new Vector2(265, 50);
++                    Size = new Vector2(265, 34);
+                 }
+ 
+                 [BackgroundDependencyLoader]
+                 private void load()
+                 {
+                     SpriteText.Colour = TextColour ?? Color4.White;
+-                    Content.CornerRadius = 10;
++                    Content.CornerRadius = 7;
+ 
+                     Add(new SpriteIcon
+                     {
+diff --git a/osu.Game/Screens/Select/SoloSongSelect.cs b/osu.Game/Screens/Select/SoloSongSelect.cs
+index 623b78b8bf..b685364b79 100644
+--- a/osu.Game/Screens/Select/SoloSongSelect.cs
++++ b/osu.Game/Screens/Select/SoloSongSelect.cs
+@@ -76,6 +76,8 @@ public override IEnumerable<OsuMenuItem> GetForwardActions(BeatmapInfo beatmap)
+                 if (beatmap.GetOnlineURL(api, Ruleset.Value) is string url)
+                     yield return new OsuMenuItem(CommonStrings.CopyLink, MenuItemType.Standard, () => game?.CopyToClipboard(url));
+ 
++                yield return CreateLookForSimilarMenuItem(beatmap);
++
+                 yield return new OsuMenuItemSpacer();
+             }
+ 
+diff --git a/osu.Game/Screens/Select/SongSelect.cs b/osu.Game/Screens/Select/SongSelect.cs
+index bc01c31758..f837bf7a21 100644
+--- a/osu.Game/Screens/Select/SongSelect.cs
++++ b/osu.Game/Screens/Select/SongSelect.cs
+@@ -42,8 +42,10 @@
+ using osu.Game.Localisation;
+ using osu.Game.Online.API;
+ using osu.Game.Online.API.Requests.Responses;
++using osu.Game.Online.Chat;
+ using osu.Game.Overlays;
+ using osu.Game.Overlays.Mods;
++using osu.Game.Overlays.Notifications;
+ using osu.Game.Overlays.Volume;
+ using osu.Game.Rulesets;
+ using osu.Game.Rulesets.Mods;
+@@ -161,6 +163,9 @@ public abstract partial class SongSelect : ScreenWithBeatmapBackground, IKeyBind
+         [Resolved]
+         private IOverlayManager? overlayManager { get; set; }
+ 
++        [Resolved]
++        private INotificationOverlay? notifications { get; set; }
++
+         private InputManager inputManager = null!;
+ 
+         private readonly RealmPopulatingOnlineLookupSource onlineLookupSource = new RealmPopulatingOnlineLookupSource();
+@@ -1242,6 +1247,8 @@ public virtual IEnumerable<OsuMenuItem> GetForwardActions(BeatmapInfo beatmap)
+ 
+                 if (beatmap.GetOnlineURL(api, Ruleset.Value) is string url)
+                     yield return new OsuMenuItem(CommonStrings.CopyLink, MenuItemType.Standard, () => (game as OsuGame)?.CopyToClipboard(url));
++
++                yield return CreateLookForSimilarMenuItem(beatmap);
+             }
+ 
+             yield return new OsuMenuItemSpacer();
+@@ -1250,6 +1257,28 @@ public virtual IEnumerable<OsuMenuItem> GetForwardActions(BeatmapInfo beatmap)
+                 yield return i;
+         }
+ 
++        // Patchsu: opens beatmap recommendations for this difficulty on bobert-web.
++        protected OsuMenuItem CreateLookForSimilarMenuItem(BeatmapInfo beatmap)
++        {
++            int beatmapId = beatmap.OnlineID;
++
++            return new OsuMenuItem(@"Look for similar", MenuItemType.External, () =>
++            {
++                if (game is not OsuGame osuGame)
++                    return;
++
++                osuGame.OpenUrlExternally($@"https://bobert-web.pages.dev/recommendations?beatmap={beatmapId}", LinkWarnMode.NeverWarn);
++                notifications?.Post(new SimpleNotification
++                {
++                    Text = @"Opened similar beatmaps in your browser.",
++                    Icon = FontAwesome.Solid.ExternalLinkAlt,
++                });
++            })
++            {
++                Icon = OsuIcon.LookForSimilar,
++            };
++        }
++
+         protected IEnumerable<OsuMenuItem> CreateCollectionMenuActions(BeatmapInfo beatmap)
+         {
+             var collectionItems = realm.Realm.All<BeatmapCollection>()
+diff --git a/osu.Game/Textures/Icons/Patchsu/look-for-similar.png b/osu.Game/Textures/Icons/Patchsu/look-for-similar.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..3511df1a4902beec18dce940a799a494a849fc29
+GIT binary patch
+literal 2213
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/osu.Game/osu.Game.csproj b/osu.Game/osu.Game.csproj
+index 91a13c3859..4b24851632 100644
+--- a/osu.Game/osu.Game.csproj
++++ b/osu.Game/osu.Game.csproj
+@@ -4,6 +4,9 @@
+     <OutputType>Library</OutputType>
+     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+   </PropertyGroup>
++  <ItemGroup Label="Patchsu icons">
++    <EmbeddedResource Include="Textures\Icons\Patchsu\*.png" />
++  </ItemGroup>
+   <PropertyGroup Label="Nuget">
+     <Title>osu!</Title>
+     <PackageId>ppy.osu.Game</PackageId>

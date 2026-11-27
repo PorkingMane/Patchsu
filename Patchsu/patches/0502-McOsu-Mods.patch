@@ -158,7 +158,7 @@ index 0000000000..a87fe37803
 +        public override string Name => "Click Control";
 +        public override string Acronym => "CC";
 +        public override IconUsage? Icon => OsuIcon.ModClickControl;
-+        public override LocalisableString Description => "Unnecessary clicks count as misses.";
++        public override LocalisableString Description => "Click only when needed, or else...";
 +        public override ModType Type => ModType.DifficultyIncrease;
 +
 +        public override Type[] IncompatibleMods => new[] { typeof(OsuModRelax), typeof(InputBlockingMod) };

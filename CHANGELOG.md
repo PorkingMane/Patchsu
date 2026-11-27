@@ -1,14 +1,39 @@
 Changelog go in patch numerical order, so 0001 will be first and 1000 will be last unless its a breaking change.
 
-#### 27 November · 9 changes
-- **New Feature**. Skip breaks. Solo plays and replays show the skip button in breaks. It skips to 3 s before the break ends. Settings > Patchsu > Patch 3. (0003)
-- Fixed skip breaks freezing map xddd
+#### 27.5 November · 13 changes
+- Added tooltip color handles allowing more variety. This differs from original osu!lazer, but this is change is as minimal as possible (0001)
+- Fixed 'Exclude this difficulty from PP' and 'Exclude this beatmap from PP' to match lazer style (0002)
+- Change 'Include this difficulty...' and 'Include this beatmap...' to use green color for better UX (0002)
+- **New Feature**. RMB click on beatmap difficulty will show 'Look for similar', which will open it on [Bobert](https://bobert-web.pages.dev/) in your browser. Officially approved by tkn :D (0003)
+- **New Feature**. You can now muffle music by right-clicking 'Now Playing' icon. Deafening on middle-click also got updated for better user experience^. Buttons are swappable. (0003)
+- Fixed RMB menu to follow parent if switched sides^^ (0003)
+- Fixed PP sorting not dropping internal PP values (0003)
+- Made F3 menu slightly thighter and added `0`, `-`, `=` buttons to support it, so now you can select 12 options with-in keyboard instead of 9 (0003)
+- Dimmed RMB menu slider slightly, as well as moved it to the right of the menu so it won't cover arrows for submenus (0003)
+- Fixed collection folders showing their children in Collection sorting menu (0008)
+- Added RMB press and hold functionality to Collection UI. Now you can hold RMB to drag collection to merge with other one if dropped on top, or moved to other parent; Click RMB to open small navigation menu for those features as well (0008)
+- Fixed NF PP reduction disabling not updating leaderboard and score PP (0009)
+- Redesigned Random V2 'Customise' UI entierly, now its A LOT more user friendly. Need feedback if possible (0501)
+- Changed few mod descriptions, as well as acronyms to follow 2 letter rule. Nothing is affecting existing replays with those mods, only a visual/search within Mod Select change (0500, 0501, 0502)
+
+^ - Muffle/Mute actions are interchangable, so when you muffle > mute > unmute, there is no muffle and vice versa. Muffle/Mute will also automatically undo themselves whenever you enter a beatmap. 
+
+^^ - Default lazer behavior opens nested menus if they have space on the screen, otherwise they would open on opposite side. To not break/redesign what lazer already has, I've added safe-state where any collection will open the same way they parent opened. 
+Example: RMB menu on beatmap difficulty will open a menu > You hover over collections > with patch 0008 those collections can also be hovered over because they contain subcollections. This would spawn windows all over the place.
+Now: You hover over collections, they open on left side from initial window because there is no screen space for them > Every sub-collection will ALSO open to the left on hover.
+This is not the best way to handle things, but I'm not redesigning official lazer functionality, rather fixing inconsistencies that patches introduces.
+
+#### 27 November · 11 changes
 - Updated Estimated Global Rank for osu!std, added for Mania, Taiko and Catch from [05 november](https://data.ppy.sh/) . Custom rulesets show "-". (0002)
 - Small safety and UI update for fetching and importing profile scores from Bancho. (0002)
+- Fixed PP sorting for Bancho plays (0002 + 0003)
+- Right-click submenus that open to the left (like Collections on the carousel) keep opening to the left instead of jumping back over the menu. (0003)
+- **New Feature**. Right-click a difficulty > "Look for similar" opens similar beatmaps on bobert-web in your browser. (0003)
+- **New Feature**. Skip breaks. Solo plays and replays show the skip button in breaks. It skips to 3 s before the break ends. Settings > Patchsu > Patch 3. (0003)
+- Fixed skip breaks freezing map xddd (0003)
 - Pauses before the first object, after the last one, or in breaks no longer cost PP. This is retroactive. (0004)
 - Updated mod icons for every new mod + .figcraft file for anyone wanting to check them out :)
-- Fixed replay view bugging accuracy out
-- Fixed PP sorting for Bancho plays
+- Fixed replay view bugging accuracy out (NOT actual bug in lazer, fixed bug on MY end)
 
 Patchsu-CLI
 - Uses the patches from GitHub's `main` branch when they're newer than the built-in ones (26 Nov).

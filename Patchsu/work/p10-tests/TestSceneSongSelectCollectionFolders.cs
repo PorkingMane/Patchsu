@@ -231,6 +231,15 @@ namespace osu.Game.Tests.Visual.SongSelect
             AddUntilStep("Inner folder appears", () => visibleFolderTitles(), () => Is.EqualTo(new[] { "Inner" }));
         }
 
+        [Test]
+        public void TestCollectionDropdownShowsTopLevelOnly()
+        {
+            AddUntilStep("only top level collections listed", () => SongSelect.ChildrenOfType<CollectionDropdown>().Single().Items
+                                                                             .Where(i => i.Collection != null)
+                                                                             .Select(i => i.CollectionName.ToString())
+                                                                             .ToArray(), () => Is.EqualTo(new[] { "Folder", "Other" }));
+        }
+
         private void filterToCollection(string name)
         {
             AddStep($"filter to {name}", () => Config.SetValue(OsuSetting.SongSelectCollectionFilter,

@@ -110,7 +110,7 @@ index 0000000000..735bbcf304
 +    {
 +        public override string Name => "Hit Sounder";
 +        public override string Acronym => "HS";
-+        public override LocalisableString Description => "Hitsounds follow your fingers, not the notes. Mash freely.";
++        public override LocalisableString Description => "Now YOU are the note!";
 +        public override ModType Type => ModType.Fun;
 +        public override IconUsage? Icon => OsuIcon.ModHitSounder;
 +
@@ -479,7 +479,7 @@ index 0000000000..5275f18167
 +        public override IconUsage? Icon => OsuIcon.ModPitchAdjust;
 +        public override ModType Type => ModType.Fun;
 +        public override LocalisableString Description =>
-+            "Shift the song's pitch up or down without changing playback speed.";
++            "Pitch change without side effects... Kinda";
 +
 +        public override bool Ranked => true;
 +

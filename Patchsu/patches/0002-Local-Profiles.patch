@@ -1668,15 +1668,16 @@ index 0000000000..1058d6e6b1
 +}
 diff --git a/osu.Game/LocalPriority/LocalPerformanceExclusions.cs b/osu.Game/LocalPriority/LocalPerformanceExclusions.cs
 new file mode 100644
-index 0000000000..c5ad425535
+index 0000000000..823fb9e9d0
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalPerformanceExclusions.cs
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,164 @@
 +using System;
 +using System.Collections.Generic;
 +using System.Linq;
 +using osu.Framework.Graphics.UserInterface;
 +using osu.Game.Beatmaps;
++using osu.Game.Graphics;
 +using osu.Game.Graphics.UserInterface;
 +using osu.Game.Scoring;
 +
@@ -1778,7 +1779,7 @@ index 0000000000..c5ad425535
 +                }
 +            }
 +
-+            return new OsuMenuItem(@"Exclude from PP", MenuItemType.Standard) { Items = items.ToArray() };
++            return new OsuMenuItem(@"Exclude from PP", MenuItemType.Destructive) { Items = items.ToArray() };
 +        }
 +
 +        /// <summary>
@@ -1789,24 +1790,43 @@ index 0000000000..c5ad425535
 +            Guid id = beatmap.ID;
 +            bool excluded = manager.Store.PerformanceExclusions.Beatmaps.Contains(id);
 +
-+            return new OsuMenuItem(excluded ? @"Include this difficulty in PP again" : @"Exclude this difficulty from PP", MenuItemType.Standard,
-+                () => manager.SetExcludedFromPerformance(LocalPerformanceExclusionKind.Beatmap, id, !excluded));
++            return new BeatmapMenuItem(excluded ? @"Include this difficulty in PP again" : @"Exclude this difficulty from PP", excluded ? MenuItemType.Positive : MenuItemType.Destructive,
++                () => manager.SetExcludedFromPerformance(LocalPerformanceExclusionKind.Beatmap, id, !excluded))
++            {
++                Icon = excluded ? OsuIcon.ModTargetPractice : OsuIcon.ModNoScope,
++            };
 +        }
 +
 +        /// <summary>
-+        /// Right-click a beatmap set in song select.
++        /// Right-click a beatmap set in song select, and "For all difficulties" in song select's options menu (<paramref name="allDifficulties"/>).
 +        /// </summary>
-+        public static OsuMenuItem CreateBeatmapSetMenuItem(LocalProfileManager manager, BeatmapSetInfo beatmapSet)
++        public static OsuMenuItem CreateBeatmapSetMenuItem(LocalProfileManager manager, BeatmapSetInfo beatmapSet, bool allDifficulties = false)
 +        {
 +            Guid id = beatmapSet.ID;
 +            bool excluded = manager.Store.PerformanceExclusions.BeatmapSets.Contains(id);
 +
-+            return new OsuMenuItem(excluded ? @"Include this beatmap set in PP again" : @"Exclude this beatmap set from PP", MenuItemType.Standard,
-+                () => manager.SetExcludedFromPerformance(LocalPerformanceExclusionKind.BeatmapSet, id, !excluded));
++            string what = allDifficulties ? @"all difficulties" : @"this beatmap set";
++
++            return new OsuMenuItem(excluded ? $@"Include {what} in PP again" : $@"Exclude {what} from PP", excluded ? MenuItemType.Positive : MenuItemType.Destructive,
++                () => manager.SetExcludedFromPerformance(LocalPerformanceExclusionKind.BeatmapSet, id, !excluded))
++            {
++                Icon = excluded ? OsuIcon.ModTargetPractice : OsuIcon.ModNoScope,
++            };
++        }
++
++        /// <summary>
++        /// Song select's options menu shows this right after "Edit" instead of where the right-click menu has it.
++        /// </summary>
++        public class BeatmapMenuItem : OsuMenuItem
++        {
++            public BeatmapMenuItem(string text, MenuItemType type, Action action)
++                : base(text, type, action)
++            {
++            }
 +        }
 +
 +        private static MenuItem toggle(bool excluded, string what, Action<bool> set) =>
-+            new OsuMenuItem(excluded ? $@"Include {what} again" : $@"Exclude {what}", MenuItemType.Standard, () => set(!excluded));
++            new OsuMenuItem(excluded ? $@"Include {what} again" : $@"Exclude {what}", excluded ? MenuItemType.Positive : MenuItemType.Destructive, () => set(!excluded));
 +    }
 +
 +    public enum LocalPerformanceExclusionKind
@@ -17803,6 +17823,103 @@ index 95328ee848..5ee1edc2ac 100644
                  {
                      unrankedBadge.MoveToX(0, duration, easing);
                      unrankedBadge.FadeIn(duration, easing);
+diff --git a/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs b/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs
+index 8ed7ab585e..1783433b1d 100644
+--- a/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs
++++ b/osu.Game/Screens/Select/FooterButtonOptions.Popover.cs
+@@ -39,6 +39,9 @@ public partial class Popover : OsuPopover
+             public ISongSelect? SongSelect { get; init; }
+             public required OverlayColourProvider ColourProvider { get; init; }
+ 
++            [Resolved]
++            private LocalPriority.LocalProfileManager? localProfiles { get; set; }
++
+             public Popover(FooterButtonOptions footerButton, BeatmapInfo beatmap)
+             {
+                 this.footerButton = footerButton;
+@@ -62,14 +65,41 @@ private void load(OsuColour colours)
+ 
+                 Debug.Assert(beatmap.BeatmapSet != null);
+                 addHeader(SongSelectStrings.ForAllDifficulties, beatmap.BeatmapSet.ToString());
++
++                // Patchsu: never give PP on local profiles for any difficulty of this set.
++                if (localProfiles != null)
++                {
++                    var exclude = LocalPriority.LocalPerformanceExclusions.CreateBeatmapSetMenuItem(localProfiles, beatmap.BeatmapSet, allDifficulties: true);
++                    addButton(exclude.Text.Value, exclude.Icon, exclude.Action.Value, exclusionColour(exclude, colours), MOD_ICON_SCALE);
++                }
++
+                 addButton(Resources.Localisation.Web.CommonStrings.ButtonsDelete, FontAwesome.Solid.Trash, () => SongSelect?.Delete(beatmap.BeatmapSet), colours.Red1);
+ 
+                 addHeader(SongSelectStrings.ForSelectedDifficulty, beatmap.DifficultyName);
+ 
+                 if (SongSelect == null) return;
+ 
+-                foreach (OsuMenuItem item in SongSelect.GetForwardActions(beatmap))
++                var actions = SongSelect.GetForwardActions(beatmap).ToList();
++
++                // Patchsu: "Exclude this difficulty from PP" goes right after "Edit" (before the first spacer),
++                // not where the right-click menu has it.
++                var excludeDifficulty = actions.OfType<LocalPriority.LocalPerformanceExclusions.BeatmapMenuItem>().FirstOrDefault();
++
++                if (excludeDifficulty != null)
+                 {
++                    actions.Remove(excludeDifficulty);
++                    int firstSpacer = actions.FindIndex(i => i is OsuMenuItemSpacer);
++                    actions.Insert(firstSpacer < 0 ? actions.Count : firstSpacer, excludeDifficulty);
++                }
++
++                foreach (OsuMenuItem item in actions)
++                {
++                    if (item == excludeDifficulty)
++                    {
++                        addButton(item.Text.Value, item.Icon, item.Action.Value, exclusionColour(item, colours), MOD_ICON_SCALE);
++                        continue;
++                    }
++
+                     // We can't display menus with child items here, so just ignore them.
+                     if (item.Items.Any())
+                         continue;
+@@ -125,12 +155,19 @@ private void addHeader(LocalisableString text, string? context = null)
+                 buttonFlow.Add(textFlow);
+             }
+ 
+-            private void addButton(LocalisableString text, IconUsage? icon, Action? action, Color4? colour = null)
++            // Patchsu: mod icons have more empty space around them than FontAwesome ones.
++            private const float MOD_ICON_SCALE = 1.9f;
++
++            // Patchsu: red while it excludes, green once it includes the difficulties again.
++            private static Color4 exclusionColour(OsuMenuItem item, OsuColour colours) => item.Type == MenuItemType.Destructive ? colours.Red1 : colours.Green1;
++
++            private void addButton(LocalisableString text, IconUsage? icon, Action? action, Color4? colour = null, float iconScale = 1)
+             {
+                 var button = new OptionButton
+                 {
+                     Text = text,
+                     Icon = icon ?? new IconUsage(),
++                    IconScale = iconScale,
+                     BackgroundColour = ColourProvider.Background3,
+                     TextColour = colour,
+                     Action = () =>
+@@ -168,6 +205,7 @@ private partial class OptionButton : OsuButton
+             {
+                 public IconUsage Icon { get; init; }
+                 public Color4? TextColour { get; init; }
++                public float IconScale { get; init; } = 1;
+ 
+                 public OptionButton()
+                 {
+@@ -184,8 +222,8 @@ private void load()
+                     {
+                         Anchor = Anchor.CentreLeft,
+                         Origin = Anchor.CentreLeft,
+-                        Size = new Vector2(17),
+-                        X = 15,
++                        Size = new Vector2(17 * IconScale),
++                        X = 15 - 17 * (IconScale - 1) / 2,
+                         Icon = Icon,
+                         Colour = TextColour ?? Color4.White,
+                     });
 diff --git a/osu.Game/Screens/Select/LocalScoreDeleteDialog.cs b/osu.Game/Screens/Select/LocalScoreDeleteDialog.cs
 index 99b6bc45e1..022ea5dbf8 100644
 --- a/osu.Game/Screens/Select/LocalScoreDeleteDialog.cs
@@ -17875,7 +17992,7 @@ index 023e9f73c3..7f17596c44 100644
              var tcs = new TaskCompletionSource<APIBeatmapSet?>();
  
 diff --git a/osu.Game/Screens/Select/SoloSongSelect.cs b/osu.Game/Screens/Select/SoloSongSelect.cs
-index 623b78b8bf..77477a557d 100644
+index 623b78b8bf..d640f32751 100644
 --- a/osu.Game/Screens/Select/SoloSongSelect.cs
 +++ b/osu.Game/Screens/Select/SoloSongSelect.cs
 @@ -46,6 +46,9 @@ public partial class SoloSongSelect : SongSelect
@@ -17888,17 +18005,18 @@ index 623b78b8bf..77477a557d 100644
          [Resolved]
          private IDialogOverlay? dialogOverlay { get; set; }
  
-@@ -94,12 +97,20 @@ public override IEnumerable<OsuMenuItem> GetForwardActions(BeatmapInfo beatmap)
+@@ -92,6 +95,10 @@ public override IEnumerable<OsuMenuItem> GetForwardActions(BeatmapInfo beatmap)
+                 Icon = FontAwesome.Solid.Eraser
+             };
  
-             if (beatmaps.CanHide(beatmap))
-                 yield return new OsuMenuItem(WebCommonStrings.ButtonsHide.ToSentence(), MenuItemType.Standard, () => beatmaps.Hide(beatmap));
-+
 +            // Patchsu: never give PP on local profiles for this difficulty (e.g. a map made for skill testing).
 +            if (localProfiles != null)
 +                yield return osu.Game.LocalPriority.LocalPerformanceExclusions.CreateBeatmapMenuItem(localProfiles, beatmap);
++
+             if (beatmaps.CanHide(beatmap))
+                 yield return new OsuMenuItem(WebCommonStrings.ButtonsHide.ToSentence(), MenuItemType.Standard, () => beatmaps.Hide(beatmap));
          }
- 
-         protected override void OnStart()
+@@ -100,6 +107,10 @@ protected override void OnStart()
          {
              if (playerLoader != null) return;
  

@@ -87,7 +87,7 @@
       "file": "0010-Collection-Folders.patch",
       "name": "Collection folders",
       "needs": ["0001"],
-      "description": "Sub-collections: a collection named \"Parent/Child\" sits inside \"Parent\". Nested submenus in beatmap menus and a tree in Manage collections."
+      "description": "Sub-collections: a collection named \"Parent/Child\" sits inside \"Parent\". Nested submenus in beatmap menus, a tree in Manage collections with right-click merge, and hold right-click to drag a collection to merge or move it."
     },
     {
       "id": "0500",

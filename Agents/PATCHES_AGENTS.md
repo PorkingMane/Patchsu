@@ -63,6 +63,11 @@ Only cuts online access, nothing else.
 - News, changelog, wiki, rankings, chat and social buttons and multiplayer / playlists / daily challenge are removed from the menus.
 - The game calls itself "Patchsu" (window title, app name). The data folder stays the official `osu` one.
 
+Shared menu colour (not part of the offline purpose, lives here so patches don't conflict):
+
+- `MenuItemType.Positive` → `OsuColour.Green1` in `DrawableOsuMenuItem`, for items that undo a destructive one (0002's
+  "Include ... in PP again"). 0003's `External` is added after it, so 0003's hunks have `Positive` as context.
+
 ## 0002 · Local profiles
 
 A fully local profile system with its own profile page, laid out like the website's.
@@ -90,7 +95,7 @@ A fully local profile system with its own profile page, laid out like the websit
   quitting), stops when a play (or a deleted score, or anything else that changes PP) reaches the goal, turns blue, and a
   "DONE!" notification shows the final time. The goal counts the ruleset shown on the profile page when the run starts, and starting it switches the game (carousel) to that ruleset.
 - Failed / quit plays show in Recent Plays (rank F).
-- Replay import (`.osr` folder) into a profile, export of the top 50 or all replays for current profile, exclude a score / difficulty / set from PP, "Transfer score" between profiles (from the profile page or a leaderboard score's right-click, replay or not), "Rebuild play statistics from saved scores" if .json broke.
+- Replay import (`.osr` folder) into a profile, export of the top 50 or all replays for current profile, exclude a score / difficulty / set from PP (red No Scope menu items; "Include ... again" is green `MenuItemType.Positive`, Target Practice icon in the F3 popover), "Transfer score" between profiles (from the profile page or a leaderboard score's right-click, replay or not), "Rebuild play statistics from saved scores" if .json broke.
 - "Fetch top 200 plays of <profile> from osu!" (Settings → Patchsu → Patch 2): the best plays (current mode) of the osu! player with the profile's name are added to the profile. Beatmaps you don't have are downloaded after asking, under one notification that counts how many are downloaded and how many are left, and each play is added once its beatmap is in. Replays osu! has for those plays are then downloaded too and replace the plays without one. The notification can be swiped away while it runs; the fetch carries on in the notification list. Plays already there are skipped. Fetched plays are saved without osu!'s PP (`PP = null`), so leaderboards / 0003's PP sort calculate it like any local score; plays fetched by older builds lose it once on load (`clearBanchoScoresPP`, migration 3). Each fetched play counts as one play (its hits, and the map's length adjusted for rate-changing mods as play time), with or without its replay; plays fetched by older builds are counted too (marked once on startup). Where the plays come from (`LocalProfileManager.pickBanchoSource`, `LocalPriority/BanchoPlaySources.cs`): if the profile's name is the signed-in online account (case-insensitive, space = underscore), the player, plays and replays go through that account, which needs "Online lookups on local profiles" on while a local profile is active. Any other name needs the user's **own osu! API key** ("osu! API key for other players' plays" group: client ID + client secret of their OAuth application, client-credentials grant, `public` scope, saved as `ApiClientId` / `ApiClientSecret` in the `LocalProfiles` section); the signed-in account is never used to ask for someone else's plays, and without a key the fetch says so and sends nothing. Beatmaps are only ever downloaded with the signed-in account; with only a key, those plays are skipped ("sign in to download their beatmaps"). The button is greyed out (and takes you to online lookups) only while online lookups are off and no key is set.
   Once the player is found (one lookup), a dialog (`BanchoConfirmDialog`) asks before anything else is sent; "No" or dismissing it ends the fetch. After a confirmed fetch ends (beatmap and replay downloads included, also when cancelled or failed), the next fetch waits 10 minutes (`BANCHO_FETCH_COOLDOWN_MINUTES`, for every profile; the end time is `TopPlaysFetchEndedAt` in the `LocalProfiles` section, so restarts keep it; never more than 10 minutes if the clock goes back). During the wait the button looks unclickable (`LocalProfileManager.BanchoFetchCoolingDown`, turns off by itself when the wait ends) but still works: clicking it sends nothing and posts a notification with the time left ("Try again in 7 minutes 5 seconds").
 - Rate limit (`LocalPriority/BanchoRequestLimiter.cs`): every request Patchsu itself sends to osu! (player lookup, score pages, beatmap and replay downloads, API key tokens, through the account or the key) starts at least 1 s after the previous one, one limiter for the whole process (osu!'s API terms: max 60 requests/minute). Lazer's own requests aren't limited. A downloaded replay's import makes one cached `GetUserRequest` of its own (`ScoreImporter`), once per player.
@@ -125,7 +130,9 @@ File `0002b-P2P-Multiplayer.patch`. Very early test of local P2P multiplayer: on
 
 Small song select / toolbar tweaks that stay true to lazer's UI:
 
-- PP sort on the beatmap leaderboard.
+- PP sort on the beatmap leaderboard. PP calculated for it (plays without saved PP) is kept per play in `LeaderboardManager.calculatedPerformance`
+  and cleared when the same criteria are fetched again (forced refresh, e.g. 0009's / 0002's PP options), so changed PP options apply.
+  The leaderboard tooltip rebuilds for a re-fetched score (`SetContent` compares by reference, not score ID).
 - Leaderboard scores show the play's star rating (with its mods) just left of the "Max Combo" caption, lined up on every
   row; it hides when the date doesn't fit beside it.
 - Right-click a sort dropdown to reverse the sort (an arrow next to "Sort" shows it).
@@ -133,9 +140,29 @@ Small song select / toolbar tweaks that stay true to lazer's UI:
   when they aren't grouped into sets). The order stays while you search; pick Random again (after another sort) or reopen
   song select for a new shuffle.
 - Right-click / drag on the star rating bar (and 0007's PP bar) moves the further end to the cursor; double right-click an end resets it; middle-click resets both.
-- Middle-click "Now playing" on the toolbar mutes the music.
+- Toolbar "Now playing" button: middle-click sets the music volume to 0 (muted icon) and back to what it was; right-click toggles
+  ducking (muffled music, same `MusicController.Duck` as Manage collections), the icon and volume bar dim while ducked. The duck and a
+  button mute (not a 0 set in settings) end as soon as a `PlayerLoader` is pushed (`OsuGame.ScreenStack.ScreenPushed`, before the
+  loader's muted-music warning check; beatmaps and replays), not on other screens that hide the toolbar (e.g. opening a score). Muting ends the duck and ducking unmutes (only one at a
+  time). Settings → Patchsu → Patch 3 can swap the two clicks.
 - "Play" and "Clear all local scores" removed from the footer Options (F3) menu.
+- F3 Options menu is tighter (buttons 34 high instead of 50, smaller header padding / spacers) and 0, - and + (=) select
+  the 10th to 12th option after 1–9.
 - Shift + arrow keys move the caret by one character while the search box has text.
+- "Look for similar" (light blue, new `MenuItemType.External` → `OsuColour.BlueLight` in `DrawableOsuMenuItem`) under "Copy link" in a
+  difficulty's right-click menu (both `GetForwardActions`, so also in the F3 Options menu, light blue there too with the Random V2
+  icon: `OsuIcon.LookForSimilar`, `Textures/Icons/Patchsu/look-for-similar.png` cropped to 76×76, embedded via an
+  `ItemGroup Label="Patchsu icons"` + a `DllResourceStore` in `InitialiseFonts`; the headless test runner skips that, so tests can't
+  load the texture). The popover handles `External` with its own `continue` before the spacer check, so 0006's context line stays
+  untouched. Only for maps with an online ID. Opens `https://bobert-web.pages.dev/recommendations?beatmap=<difficulty id>`
+  (`LinkWarnMode.NeverWarn`) and posts a `SimpleNotification`. Helper `SongSelect.CreateLookForSimilarMenuItem`.
+- Context menu scrollbar is half see-through (`OsuMenu.MenuScrollContainer`, scrollbar box alpha 0.5) so submenu arrows under it
+  stay visible.
+- Submenus keep going left: a submenu opened from one that went left (e.g. a sub-collection inside "Collections" on a right-side
+  carousel) opens left too while it fits there, instead of jumping back over its parents. `OsuMenu.updateSide` (every `OsuMenu`)
+  only moves the submenu's own `X`; the framework's placement of the parent's submenu container is left alone, so its
+  `positionLayout` stays valid (no per-frame re-layout). A submenu with nested items that has less room on its right than its own
+  width (guessed child width) opens left from the start when left fits, so its children follow it left instead of flipping over the root menu.
 - Skip button in breaks (solo plays and replays only): skips to 3 seconds before the break ends, shown when at least 1 s can be
   skipped. Settings → Patchsu → "Patch 3. Interface Improvements" → "Allow skipping breaks longer than 3 seconds" (on by
   default, `PatchsuSettings` "Interface"/"SkipBreaks"). Files: `LocalPriority/LocalInterfaceSettings.cs`, `Screens/Play/Player.cs`.
@@ -253,6 +280,7 @@ Settings → Patchsu → "Patch 9. Ignore No Fail": plays with No Fail give PP a
 PP counter, 0003's sort, 0006's simulation, local profiles). The play itself keeps NF. Settings in the `NoFail` section of `PatchsuSettings.json` (an old `patch12.json` is taken over once and deleted).
 "Also remove 'No Fail' score reduction" shows NF plays' score x2, and every list orders by that shown score: leaderboards, the
 results screen's score panels and the in-game leaderboard.
+The results screen and leaderboard tooltip don't use a NF play's saved PP (it has NF in it) while this is on; they calculate it.
 
 ## 0010 · Collection folders
 
@@ -268,6 +296,11 @@ collections and removing the patch loses nothing.
 - Right-click a folder: new sub-collection, rename, move to, merge into parent (a sub-folder's beatmaps go into the parent
   collection), manage, delete (with its sub-collections).
 - Nested submenus in beatmap collection menus (a parent is still clickable), a tree with "+" and delete buttons in Manage collections.
+- The song select Collection dropdown lists only top level collections.
+- Manage collections: right-click a collection (menu opens on release) for "Merge into" (nested, a parent's submenu starts with
+  itself), "Rename", "New sub-collection". Holding right-click 500 ms drags a see-through copy: middle of a row = merge into it
+  (yellow border), top edge = move next to it, bottom edge = move inside it (yellow line, indented where it lands).
+  Merging flattens the collection and its sub-collections into the target, without asking; moving keeps sub-collections.
 
 ## 0500 · Ritsu mods
 
@@ -284,6 +317,17 @@ acronyms kept as in Ritsu.
 
 Patchsu additions: No Sliding length threshold, and scores saved with an unresolved mod (`XX??`)
 resolve to the real mod. Own mod icons for Decoy Circles, Miss Challenge, No Sliding and RandomV2 (`ritsu-*.png`). Not ported: Directional Flicks, RandomV2 / Spacing Adjust replay panels.
+RandomV2 settings are reordered (`OrderPosition`: spacing, angles, patterns, Seed last) and reworded. "Angle style"
+(Random / Star / 45° / 90°, `AngleStyleSetting`) replaces the "Custom angle" toggle: it drives the still saved `CustomAngle` +
+`Angle` (Random = `CustomAngle` off, or on with `AngleEnum.Custom` while patterns are selected; picking a pattern turns it on), so
+old scores/replays keep their settings and maps (`RitsuVariantOutputTest` dump identical). Sharpness sliders show only for Random;
+"Pattern mode" dropdown (one list / per note type, copies the selection when switching) replaces "Separate pattern selections";
+Mirrored / Progressive show only with a pattern selected. Hover previews (`OsuModRandomV2.Previews.cs`, `CirclePreviewTooltip`,
+built lazily on hover from the real spacing / angle formulas): rhythm rows for Jump / Stream spacing, the Exponential toggles
+and Stream threshold (sliders update while dragging, `SpacingSliderSetting` + `PreviewSliderBar`), angle path, each pattern's
+shape, mirrored pair, stacks. Exponential spacing returns the distance unchanged at 1.0x and below, so its preview says so there.
+`CirclePreviewTooltip` always animates between contents (reuses circles by index, new ones grow in, extra ones shrink out and
+expire, `PreviewLine`s track their two circles). Pattern checkboxes use padding instead of flow spacing, so moving between them never falls through to the "Patterns" tooltip.
 The Modosu-derived files are **GPL-3.0** (`LICENCE-Modosu.txt` is added by the patch).
 
 ## 0501 · Torii mods

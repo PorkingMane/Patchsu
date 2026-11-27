@@ -34,13 +34,16 @@ How it works (for later patches):
   written with one line of context so it applies with or without 0003's hunk next to it.
   Ranking/ScorePanelList (panel order), Ranking/SoloResultsScreen (own better score check) and
   Play/Leaderboards/SoloGameplayLeaderboardProvider (HUD order, only while the score option is on) compare the score as shown.
+- Saved PP: ScoreInfo.PP was saved with No Fail, so Ranking/Expanded/Statistics/PerformanceStatistic (results screen) and
+  Select/BeatmapLeaderboardScore.Tooltip (leaderboard PP) skip it for No Fail plays while No Fail is ignored
+  (LocalNoFailPerformance.IgnoresSavedPerformance) and calculate instead. Written without leading context so they apply with or without 0004.
 
 diff --git a/osu.Game/LocalPriority/LocalNoFailPerformance.cs b/osu.Game/LocalPriority/LocalNoFailPerformance.cs
 new file mode 100644
-index 0000000000..7cfccb5a37
+index 0000000000..2df51140e9
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalNoFailPerformance.cs
-@@ -0,0 +1,292 @@
+@@ -0,0 +1,298 @@
 +// Patched for fun and personal needs. I suggest playing osu!lazer instead of this client. All modifications are done with AI from personal interest.
 +// Peppy openly stated that he does not like using AI and we completely respect it. I only do it for research purposes and to see what features I would love in lazer.
 +// To use it you'll need to compile it on your PC using provided .sh / .cmd files.
@@ -234,6 +237,12 @@ index 0000000000..7cfccb5a37
 +        }
 +
 +        public static bool HasNoFail(ScoreInfo score) => score.APIMods.Any(m => m.Acronym == @"NF");
++
++        /// <summary>
++        /// Whether a play's saved PP can't be shown (results screen, leaderboard tooltip): it was saved with No Fail,
++        /// so a No Fail play is calculated again while No Fail is ignored.
++        /// </summary>
++        public static bool IgnoresSavedPerformance(ScoreInfo score) => Ignore && HasNoFail(score);
 +
 +        /// <summary>
 +        /// The PP of a No Fail play without No Fail, from the cache or calculated once.
@@ -633,6 +642,17 @@ index 62d1220c50..a112a12241 100644
                                   .ThenBy(i => i.TotalScoreTiebreaker)
                                   .ToList();
  
+diff --git a/osu.Game/Screens/Ranking/Expanded/Statistics/PerformanceStatistic.cs b/osu.Game/Screens/Ranking/Expanded/Statistics/PerformanceStatistic.cs
+index c9285dc68e..50a5d1526b 100644
+--- a/osu.Game/Screens/Ranking/Expanded/Statistics/PerformanceStatistic.cs
++++ b/osu.Game/Screens/Ranking/Expanded/Statistics/PerformanceStatistic.cs
+@@ -45,4 +45,5 @@
+-            if (score.PP.HasValue)
++            // Patchsu (Patch 9): a No Fail play's saved PP still has No Fail in it.
++            if (score.PP.HasValue && !LocalNoFailPerformance.IgnoresSavedPerformance(score))
+             {
+                 setPerformanceValue(score, score.PP.Value);
+             }
 diff --git a/osu.Game/Screens/Ranking/ScorePanelList.cs b/osu.Game/Screens/Ranking/ScorePanelList.cs
 index b0e1c89121..58b4c5c089 100644
 --- a/osu.Game/Screens/Ranking/ScorePanelList.cs
@@ -662,3 +682,14 @@ index 1ed6f70f23..960f70d402 100644
  
                      if (isOnlineLeaderboard && presentedLocalUserScoreIsBetter)
                          continue;
+diff --git a/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs b/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs
+index cd81e2bb5b..14d66df0e4 100644
+--- a/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs
++++ b/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs
+@@ -287,4 +287,5 @@
+-                    if (score.PP.HasValue)
++                    // Patchsu (Patch 9): a No Fail play's saved PP still has No Fail in it.
++                    if (score.PP.HasValue && !LocalNoFailPerformance.IgnoresSavedPerformance(score))
+                     {
+                         setPerformanceValue(score, score.PP.Value);
+                         return;

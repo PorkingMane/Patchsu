@@ -19,6 +19,9 @@ one section per patch, only values that differ from their defaults (PatchsuSetti
 It's loaded in OsuGameBase.SetHost before game.ini, and flushed when the game closes. On the first start it renames the old
 "osu-local" folder to "patchsu-osu" and keeps game.ini's old lines, so patches can take over settings that used to be there.
 
+Also adds a green MenuItemType.Positive for right-click menus (DrawableOsuMenuItem), for items that undo a destructive one
+(0002's "Include ... in PP again"). It lives here so 0003's own MenuItemType.External can sit on top without conflicting.
+
 diff --git a/osu.Desktop/OsuGameDesktop.cs b/osu.Desktop/OsuGameDesktop.cs
 index 0aac501ea0..b71c0110c9 100644
 --- a/osu.Desktop/OsuGameDesktop.cs
@@ -49,6 +52,36 @@ index 5b37417499..79c34abe69 100644
                      };
  
                  case ModType.System:
+diff --git a/osu.Game/Graphics/UserInterface/DrawableOsuMenuItem.cs b/osu.Game/Graphics/UserInterface/DrawableOsuMenuItem.cs
+index deb2a18b28..e2330ef401 100644
+--- a/osu.Game/Graphics/UserInterface/DrawableOsuMenuItem.cs
++++ b/osu.Game/Graphics/UserInterface/DrawableOsuMenuItem.cs
+@@ -101,6 +101,10 @@ private void updateText()
+                 case MenuItemType.Highlighted:
+                     text.Colour = Color4Extensions.FromHex(@"ffcc22");
+                     break;
++
++                case MenuItemType.Positive:
++                    text.Colour = colours.Green1;
++                    break;
+             }
+ 
+             hotkey.Hotkey = osuMenuItem?.Hotkey ?? default;
+diff --git a/osu.Game/Graphics/UserInterface/MenuItemType.cs b/osu.Game/Graphics/UserInterface/MenuItemType.cs
+index 0269f2cb57..051fc64bb5 100644
+--- a/osu.Game/Graphics/UserInterface/MenuItemType.cs
++++ b/osu.Game/Graphics/UserInterface/MenuItemType.cs
+@@ -8,5 +8,10 @@ public enum MenuItemType
+         Standard,
+         Highlighted,
+         Destructive,
++
++        /// <summary>
++        /// Patchsu: green, for items that undo a destructive one (e.g. including a beatmap in PP again).
++        /// </summary>
++        Positive,
+     }
+ }
 diff --git a/osu.Game/LocalPriority/PatchSettings.cs b/osu.Game/LocalPriority/PatchSettings.cs
 new file mode 100644
 index 0000000000..27c235ee36
