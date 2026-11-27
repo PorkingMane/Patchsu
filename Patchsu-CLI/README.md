@@ -111,11 +111,15 @@ The manifest is validated on load: unknown ids in `needs` or presets, loops, and
 go generate ./internal/bundle      # copies ../Patchsu/patches and the logo into the binary
 go build -o Patchsu-CLI .
 go test ./...
-# release binaries (run go generate first, or they have no built-in patches)
-for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
-  GOOS=${t%/*} GOARCH=${t#*/} go build -ldflags "-s -w -X main.Version=1.1.0" -o dist/Patchsu-CLI-${t%/*}-${t#*/}$( [ ${t%/*} = windows ] && echo .exe ) .
-done
+./build-release.sh [version]       # release binaries for Linux, macOS, Windows (x64 + arm64) in dist/
 ```
+
+Upload every file in `dist/` to the release. Release notes for users:
+
+- Windows: run `Patchsu-CLI-windows-amd64.exe` (double-click, or `.\Patchsu-CLI-windows-amd64.exe` in cmd; `./` doesn't work in cmd).
+- macOS: `darwin-arm64` for Apple Silicon, `darwin-amd64` for Intel. The binary isn't notarized, so once:
+  `chmod +x Patchsu-CLI-darwin-arm64 && xattr -d com.apple.quarantine Patchsu-CLI-darwin-arm64`, then `./Patchsu-CLI-darwin-arm64`.
+- Linux: `chmod +x Patchsu-CLI-linux-amd64 && ./Patchsu-CLI-linux-amd64`.
 
 Without `go generate` the binary has no built-in patches and looks for a GitHub release instead. The patch copies in
 `internal/bundle/patches` aren't committed; the logo copies in `internal/bundle/logo` are.
