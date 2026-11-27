@@ -1,5 +1,18 @@
 Changelog go in patch numerical order, so 0001 will be first and 1000 will be last unless its a breaking change.
 
+#### 27 November · 9 changes
+- **New Feature**. Skip breaks. Solo plays and replays show the skip button in breaks. It skips to 3 s before the break ends. Settings > Patchsu > Patch 3. (0003)
+- Fixed skip breaks freezing map xddd
+- Updated Estimated Global Rank for osu!std, added for Mania, Taiko and Catch from [05 november](https://data.ppy.sh/) . Custom rulesets show "-". (0002)
+- Small safety and UI update for fetching and importing profile scores from Bancho. (0002)
+- Pauses before the first object, after the last one, or in breaks no longer cost PP. This is retroactive. (0004)
+- Updated mod icons for every new mod + .figcraft file for anyone wanting to check them out :)
+- Fixed replay view bugging accuracy out
+- Fixed PP sorting for Bancho plays
+
+Patchsu-CLI
+- Uses the patches from GitHub's `main` branch when they're newer than the built-in ones (26 Nov).
+
 ## V1.1 Release
 
 #### 26 November · 5 changes
@@ -28,7 +41,7 @@ Changelog go in patch numerical order, so 0001 will be first and 1000 will be la
 
 - **Patchsu single setting file**, `patchsu-osu/PatchsuSettings.json` in the osu! data folder (0001).
 - **Patchsu old folder rename**. The `osu-local` folder is renamed to `patchsu-osu` on the first start. Your old settings are moved over by themselves (from game.ini, profiles.json and patch12.json) and removed from the old places. (0001/0002/0003/0007/0008/0009)
-- `LOCAL map PP`, `Profiles with mod rules` and `Gray out scores that do not go towards PP` are now ON by default (0002)
+- `Profiles with mod rules` and `Gray out scores that do not go towards PP` are now ON by default, `Count LOCAL maps towards PP` is now OFF by default. (0002)
 - Fixed scores from Bancho did not increase Judgments/Playtime and were imported as NUL owner ID/ (0002)
 - Fixed Total Play Time not matching osu!web / in-game profile viewer. (0002)
 - New Feature. **Search scores by their set date**. You can now search scores by when they were set via `scoredate`,`datescore`,`playdate`, For example `playdate<=180d` will search for scores that are set within 180 days from now and show you those beatmaps. `<` `>` and `=` works as filters, as well as days `<30d`, weeks `>4w`, months `=1m` and years `<2y`. Example use case - whenever you import scores from Bancho to local profile you can filter out by date and remember your old maps without going through profile. (0003b)
@@ -37,7 +50,10 @@ Changelog go in patch numerical order, so 0001 will be first and 1000 will be la
 
 #### 25 November · ~50 changes
 - **New Feature**. Speedrun profiles ("⋮" next to "+", named "SP Profile"). Set a PP or estimated-rank goal `1000 / #10000`, auto calculates rank from PP and vice versa. A timer counts while the profile is active and stops, blue, with a "DONE!" notification when the goal is reached. "Reset SD/PF/SP profile count" now resets SP numbering too. (0002)
-- **New Feature**. Fetch top 200 plays for profile with the same name as your Local One from osu! (Settings > Patch 2): adds that osu! player's best plays (current mode), downloads missing beatmaps after asking (one swipeable progress notification), then their replays where available. Skips plays already there. Needs "Online lookups on local profiles". Added this because friend sent Neki!stable client and this is a dope feature. (0002)
+- **New Feature**. Fetch top 200 plays for profile with the same name as your Local One from osu! (Settings > Patch 2): adds that osu! player's best plays (current mode), downloads missing beatmaps after asking (one swipeable progress notification), then their replays where available. Uses osu!api key for players that you are not loggined for^. Skips plays already there. Needs "Online lookups on local profiles". Added this because friend sent Neki!stable client and this is a dope feature. (0002)
+
+^ - If you are loggined via profile, for example 'Mrekk', you will able to fetch your own scores for Local Profile called 'Mrekk' as well, because we reuse your own login for it, HOWEVER, if you login as Mrekk and try to fetch plays/replays for account 'Sytho', you will be rejected. We would violate osu!API rules otherwise. We fetch once per second at most. You also have a limit for one sync per 10 minutes for any profile after syncing is complete.
+
 - Estimated global rank no longer stops at #120. (0002)
 - SD/PF profiles countdown is now 30s with a setting that brings back 1 minute, shows seconds only, and only the last 3 s make a sound. On the last look, Best Performance scores fade away one by one. (0002)
 - Clicking a failed / quit play in Recent Plays opens its beatmap in song select instead of doing nothing. (0002)

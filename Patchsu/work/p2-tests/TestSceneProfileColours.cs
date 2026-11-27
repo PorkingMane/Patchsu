@@ -65,7 +65,8 @@ namespace osu.Game.Tests.Visual.Navigation
             {
                 var patch2 = Game.Settings.ChildrenOfType<LocalProfileBehaviourSettings>().Single();
                 var groups = patch2.ChildrenOfType<LocalSettingsGroup>().ToList();
-                return patch2.PatchNumber == 2 && groups.Count == 2 && groups[0] is LocalProfileColourSettings && groups[1] is LocalOnlineLookupSettings;
+                return patch2.PatchNumber == 2 && groups.Count == 3 && groups[0] is LocalProfileColourSettings && groups[1] is LocalOnlineLookupSettings
+                       && groups[2] is LocalBanchoApiKeySettings;
             });
         }
 

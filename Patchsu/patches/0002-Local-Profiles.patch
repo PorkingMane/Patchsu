@@ -117,6 +117,347 @@ index 18bdc442e1..1b06c1c50e 100644
              bool isRefetch = storage.Exists(cache_database_name);
  
              string cacheFilePath = storage.GetFullPath(cache_database_name);
+diff --git a/osu.Game/LocalPriority/BanchoPlaySources.cs b/osu.Game/LocalPriority/BanchoPlaySources.cs
+new file mode 100644
+index 0000000000..a11264a5d4
+--- /dev/null
++++ b/osu.Game/LocalPriority/BanchoPlaySources.cs
+@@ -0,0 +1,285 @@
++using System;
++using System.Collections.Generic;
++using System.Globalization;
++using System.IO;
++using System.Net;
++using System.Net.Http;
++using System.Net.Http.Headers;
++using System.Threading;
++using System.Threading.Tasks;
++using Newtonsoft.Json;
++using osu.Framework.Logging;
++using osu.Game.Online.API;
++using osu.Game.Online.API.Requests;
++using osu.Game.Online.API.Requests.Responses;
++using osu.Game.Rulesets;
++
++namespace osu.Game.LocalPriority
++{
++    /// <summary>
++    /// Where "Fetch top plays" gets a player and their plays and replays from. Every request waits for <see cref="BanchoRequestLimiter"/>.
++    /// Failures return null (and are logged); cancelling the token throws.
++    /// </summary>
++    internal interface IBanchoPlaySource
++    {
++        Task<APIUser?> GetUser(string name, RulesetInfo ruleset, CancellationToken token);
++
++        Task<List<SoloScoreInfo>?> GetBestPlays(int userId, RulesetInfo ruleset, int offset, int limit, CancellationToken token);
++
++        /// <summary>
++        /// Downloads the play's replay to a temporary .osr file (importing it deletes the file).
++        /// </summary>
++        Task<string?> DownloadReplay(SoloScoreInfo play, CancellationToken token);
++    }
++
++    /// <summary>
++    /// Your own plays, through the signed-in account (the same requests the profile page and replay buttons make).
++    /// </summary>
++    internal sealed class AccountBanchoPlaySource : IBanchoPlaySource
++    {
++        private readonly IAPIProvider api;
++
++        public AccountBanchoPlaySource(IAPIProvider api)
++        {
++            this.api = api;
++        }
++
++        public Task<APIUser?> GetUser(string name, RulesetInfo ruleset, CancellationToken token)
++            => Perform(api, new GetUserRequest(name, ruleset), token);
++
++        public Task<List<SoloScoreInfo>?> GetBestPlays(int userId, RulesetInfo ruleset, int offset, int limit, CancellationToken token)
++            => Perform(api, new GetUserScoresRequest(userId, ScoreType.Best, new PaginationParameters(offset, limit), ruleset), token);
++
++        public Task<string?> DownloadReplay(SoloScoreInfo play, CancellationToken token)
++            => PerformDownload(api, new DownloadReplayRequest(play), token);
++
++        /// <summary>
++        /// Queues the request (after waiting for its turn) and waits for its response: null when it failed.
++        /// </summary>
++        public static Task<T?> Perform<T>(IAPIProvider api, APIRequest<T> request, CancellationToken token)
++            where T : class
++        {
++            var tcs = new TaskCompletionSource<T?>(TaskCreationOptions.RunContinuationsAsynchronously);
++            request.Success += response => tcs.TrySetResult(response);
++            request.Failure += e => fail(request, tcs, e);
++            return queue(api, request, tcs, token);
++        }
++
++        /// <summary>
++        /// Like <see cref="Perform{T}"/>, for a download: the downloaded file, or null.
++        /// </summary>
++        public static Task<string?> PerformDownload(IAPIProvider api, APIDownloadRequest request, CancellationToken token)
++        {
++            var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
++            request.Success += filename => tcs.TrySetResult(filename);
++            request.Failure += e => fail(request, tcs, e);
++            return queue(api, request, tcs, token);
++        }
++
++        private static void fail<T>(APIRequest request, TaskCompletionSource<T?> tcs, Exception e)
++            where T : class
++        {
++            if (e is OperationCanceledException)
++                tcs.TrySetCanceled();
++            else
++            {
++                Logger.Log($@"Patchsu: {request.GetType().Name} failed: {e.Message}");
++                tcs.TrySetResult(null);
++            }
++        }
++
++        private static async Task<T?> queue<T>(IAPIProvider api, APIRequest request, TaskCompletionSource<T?> tcs, CancellationToken token)
++            where T : class
++        {
++            await BanchoRequestLimiter.WaitAsync(token).ConfigureAwait(false);
++
++            await using (token.Register(request.Cancel))
++            {
++                api.Queue(request);
++                var result = await tcs.Task.ConfigureAwait(false);
++                token.ThrowIfCancellationRequested();
++                return result;
++            }
++        }
++    }
++
++    /// <summary>
++    /// osu! didn't accept the API key (client ID / secret).
++    /// </summary>
++    internal sealed class BanchoApiKeyRejectedException : Exception
++    {
++        public BanchoApiKeyRejectedException(string message)
++            : base(message)
++        {
++        }
++    }
++
++    /// <summary>
++    /// Any player's plays, through the user's own osu! API v2 key (an OAuth application of theirs, client credentials, "public" scope),
++    /// not lazer's client or the signed-in account.
++    /// </summary>
++    internal sealed class ApiKeyBanchoPlaySource : IBanchoPlaySource
++    {
++        private static readonly HttpClient http = createClient();
++
++        private static HttpClient createClient()
++        {
++            var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
++            client.DefaultRequestHeaders.UserAgent.ParseAdd(@"Patchsu");
++            return client;
++        }
++
++        private static readonly SemaphoreSlim tokenLock = new SemaphoreSlim(1, 1);
++
++        /// <summary>
++        /// The last token, reused until shortly before it expires (for the same key only).
++        /// </summary>
++        private static (string Key, string Token, DateTimeOffset Expires)? cachedToken;
++
++        private readonly string apiUrl;
++        private readonly int apiVersion;
++        private readonly string clientId;
++        private readonly string clientSecret;
++
++        public ApiKeyBanchoPlaySource(string apiUrl, int apiVersion, string clientId, string clientSecret)
++        {
++            this.apiUrl = apiUrl.TrimEnd('/');
++            this.apiVersion = apiVersion;
++            this.clientId = clientId.Trim();
++            this.clientSecret = clientSecret.Trim();
++        }
++
++        public Task<APIUser?> GetUser(string name, RulesetInfo ruleset, CancellationToken token)
++            => getJson<APIUser>($@"users/{Uri.EscapeDataString(name)}/{ruleset.ShortName}?key=username", token);
++
++        public Task<List<SoloScoreInfo>?> GetBestPlays(int userId, RulesetInfo ruleset, int offset, int limit, CancellationToken token)
++            => getJson<List<SoloScoreInfo>>(string.Create(CultureInfo.InvariantCulture,
++                $@"users/{userId}/scores/best?mode={ruleset.ShortName}&limit={limit}&offset={offset}"), token);
++
++        public async Task<string?> DownloadReplay(SoloScoreInfo play, CancellationToken token)
++        {
++            using var response = await send($@"scores/{play.OnlineID}/download", token).ConfigureAwait(false);
++
++            if (response == null)
++                return null;
++
++            string path = Path.Combine(Path.GetTempPath(), $@"patchsu-replay-{play.OnlineID}-{Guid.NewGuid():N}.osr");
++
++            var file = File.Create(path);
++
++            await using (file.ConfigureAwait(false))
++                await response.Content.CopyToAsync(file, token).ConfigureAwait(false);
++
++            return path;
++        }
++
++        private async Task<T?> getJson<T>(string target, CancellationToken token)
++            where T : class
++        {
++            using var response = await send(target, token).ConfigureAwait(false);
++
++            if (response == null)
++                return null;
++
++            string json = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
++            return JsonConvert.DeserializeObject<T>(json);
++        }
++
++        /// <summary>
++        /// A successful response, or null (logged). A rejected token is renewed once.
++        /// </summary>
++        private async Task<HttpResponseMessage?> send(string target, CancellationToken token)
++        {
++            for (int attempt = 0; attempt < 2; attempt++)
++            {
++                string accessToken = await getToken(token).ConfigureAwait(false);
++
++                await BanchoRequestLimiter.WaitAsync(token).ConfigureAwait(false);
++
++                var request = new HttpRequestMessage(HttpMethod.Get, $@"{apiUrl}/api/v2/{target}");
++                request.Headers.Authorization = new AuthenticationHeaderValue(@"Bearer", accessToken);
++                request.Headers.Add(@"x-api-version", apiVersion.ToString(CultureInfo.InvariantCulture));
++
++                var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
++
++                if (response.IsSuccessStatusCode)
++                    return response;
++
++                response.Dispose();
++
++                if (response.StatusCode == HttpStatusCode.Unauthorized && attempt == 0)
++                {
++                    ForgetToken();
++                    continue;
++                }
++
++                Logger.Log($@"Patchsu: osu! API request {target.Split('?')[0]} failed: {(int)response.StatusCode} {response.ReasonPhrase}");
++                return null;
++            }
++
++            return null;
++        }
++
++        private string cacheKey => clientId + "\n" + clientSecret;
++
++        /// <summary>
++        /// Drops the cached token (also used by tests).
++        /// </summary>
++        internal static void ForgetToken()
++        {
++            tokenLock.Wait();
++            cachedToken = null;
++            tokenLock.Release();
++        }
++
++        private async Task<string> getToken(CancellationToken token)
++        {
++            await tokenLock.WaitAsync(token).ConfigureAwait(false);
++
++            try
++            {
++                if (cachedToken is var (key, accessToken, expires) && key == cacheKey && expires > DateTimeOffset.UtcNow)
++                    return accessToken;
++
++                await BanchoRequestLimiter.WaitAsync(token).ConfigureAwait(false);
++
++                using var content = new FormUrlEncodedContent(new Dictionary<string, string>
++                {
++                    [@"client_id"] = clientId,
++                    [@"client_secret"] = clientSecret,
++                    [@"grant_type"] = @"client_credentials",
++                    [@"scope"] = @"public",
++                });
++
++                using var response = await http.PostAsync($@"{apiUrl}/oauth/token", content, token).ConfigureAwait(false);
++
++                if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized)
++                    throw new BanchoApiKeyRejectedException(@"osu! didn't accept your API key. Check the client ID and secret in Settings → Patchsu → Patch 2.");
++
++                response.EnsureSuccessStatusCode();
++
++                var result = JsonConvert.DeserializeObject<TokenResponse>(await response.Content.ReadAsStringAsync(token).ConfigureAwait(false));
++
++                if (string.IsNullOrEmpty(result?.AccessToken))
++                    throw new BanchoApiKeyRejectedException(@"osu! didn't give a token for your API key.");
++
++                // Renewed a minute early, so a token never runs out in the middle of a fetch.
++                cachedToken = (cacheKey, result.AccessToken, DateTimeOffset.UtcNow.AddSeconds(Math.Max(0, result.ExpiresIn - 60)));
++                return result.AccessToken;
++            }
++            finally
++            {
++                tokenLock.Release();
++            }
++        }
++
++        private class TokenResponse
++        {
++            [JsonProperty(@"access_token")]
++            public string? AccessToken { get; set; }
++
++            [JsonProperty(@"expires_in")]
++            public long ExpiresIn { get; set; }
++        }
++    }
++}
+diff --git a/osu.Game/LocalPriority/BanchoRequestLimiter.cs b/osu.Game/LocalPriority/BanchoRequestLimiter.cs
+new file mode 100644
+index 0000000000..798f208911
+--- /dev/null
++++ b/osu.Game/LocalPriority/BanchoRequestLimiter.cs
+@@ -0,0 +1,44 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++
++namespace osu.Game.LocalPriority
++{
++    /// <summary>
++    /// Spaces out every request Patchsu itself sends to osu! (top plays, beatmap and replay downloads, API key tokens), whichever
++    /// account or key it goes through: osu!'s API terms ask for no more than 60 requests a minute. One for the whole process.
++    /// osu!'s own requests (leaderboards, beatmap lookups…) aren't counted; they're what the official client sends anyway.
++    /// </summary>
++    public static class BanchoRequestLimiter
++    {
++        /// <summary>
++        /// The shortest time between the starts of two requests.
++        /// </summary>
++        public const int INTERVAL_MS = 1000;
++
++        private static readonly object sync = new object();
++
++        /// <summary>
++        /// When the next request may start (<see cref="Environment.TickCount64"/>).
++        /// </summary>
++        private static long nextRequestAt;
++
++        /// <summary>
++        /// Waits for the caller's turn. Each caller reserves its own slot, so callers waiting together start one by one.
++        /// </summary>
++        public static Task WaitAsync(CancellationToken token)
++        {
++            long wait;
++
++            lock (sync)
++            {
++                long now = Environment.TickCount64;
++                long start = Math.Max(now, nextRequestAt);
++                nextRequestAt = start + INTERVAL_MS;
++                wait = start - now;
++            }
++
++            return wait > 0 ? Task.Delay(TimeSpan.FromMilliseconds(wait), token) : Task.CompletedTask;
++        }
++    }
++}
 diff --git a/osu.Game/LocalPriority/LocalAutoSwitchCondition.cs b/osu.Game/LocalPriority/LocalAutoSwitchCondition.cs
 new file mode 100644
 index 0000000000..8d00dcadab
@@ -816,7 +1157,7 @@ index 0000000000..50f8c7b30d
 +}
 diff --git a/osu.Game/LocalPriority/LocalBeatmapTags.cs b/osu.Game/LocalPriority/LocalBeatmapTags.cs
 new file mode 100644
-index 0000000000..1d0f4325f0
+index 0000000000..ed9a3c4c54
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalBeatmapTags.cs
 @@ -0,0 +1,147 @@
@@ -1548,10 +1889,10 @@ index 0000000000..7e8f4483a0
 +}
 diff --git a/osu.Game/LocalPriority/LocalPriorityPolicy.Profiles.cs b/osu.Game/LocalPriority/LocalPriorityPolicy.Profiles.cs
 new file mode 100644
-index 0000000000..28204fd2e2
+index 0000000000..a7a901b725
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalPriorityPolicy.Profiles.cs
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,295 @@
 +using System;
 +using System.Collections.Generic;
 +using System.Linq;
@@ -1695,80 +2036,132 @@ index 0000000000..28204fd2e2
 +
 +        #region Estimated global rank
 +
-+        // PP-to-rank curve as used by Ritsu (copied there from Modosu by Azuuryy, derived from MOsu by p-720, GPL-3.0),
-+        // attributed to a September 2026 sample of 10,000 osu! profiles. Standard (osu!) mode only. Offline estimate, not an official rank.
-+        private static readonly (double PP, int Rank)[] rank_curve =
++        // PP-to-rank curves from the osu! performance data dumps of 2026-11-05 (every player of the top 10,000 and 10,000 random
++        // players per ruleset), highest PP first. Offline estimate, not an official rank.
++        private static readonly (double PP, int Rank)[] osu_rank_curve =
 +        {
-+            (2.11, 2852394), (45.65, 2142296), (139.97, 1750230), (375.42, 1336787),
-+            (721.22, 1020639), (1148.03, 779960), (1621.4, 595532), (2125.51, 454565),
-+            (2708.02, 335739), (3302.75, 247883), (3978.95, 177279), (4665.01, 126882),
-+            (5403.43, 87234), (6164.53, 58191), (6911.02, 39304), (7677.87, 26024),
-+            (8519.1, 16828), (9518.04, 9896), (10741.3, 4951), (11762, 2910),
-+            (13010.5, 1549), (15002.6, 553), (17051.7, 211), (18305.4, 120),
++            (32269, 1), (30616.9, 2), (30149.5, 3), (27135.2, 5), (26407.6, 7),
++            (24119.4, 11), (23160.3, 16), (21742, 25), (21135.8, 37), (20148.7, 55),
++            (19274.5, 82), (18506.6, 122), (17458.8, 182), (16634.1, 272), (15796.3, 406),
++            (14939.8, 606), (14130.9, 905), (13343.1, 1350), (12569.6, 2015), (11796.6, 3008),
++            (11007.9, 4489), (10292.4, 6700), (9604.45, 10000), (8360.95, 20000), (7515.49, 30000),
++            (6569.26, 50000), (6168.49, 60000), (5652.95, 80000), (5058.52, 110000), (4419.15, 150000),
++            (3766.61, 210000), (3161.53, 280000), (2567.87, 380000), (1975.74, 520000), (1443.37, 700000),
++            (930.88, 950000), (508.4, 1280000), (198.46, 1740000), (43.83, 2360000), (2.11, 3192119),
++        };
++
++        private static readonly (double PP, int Rank)[] taiko_rank_curve =
++        {
++            (28614.7, 1), (27080.2, 2), (24317.2, 3), (24013.2, 5), (23198, 7),
++            (22489.5, 11), (21666.7, 16), (20922, 25), (20391.2, 37), (19757.6, 55),
++            (18587.1, 82), (17735.4, 122), (16732.9, 182), (15607.2, 272), (14360.6, 406),
++            (13135.7, 606), (11915.3, 905), (10721, 1350), (9360.02, 2015), (7984.31, 3008),
++            (6629.55, 4489), (5255.1, 6700), (3937.78, 10000), (3270.9, 12000), (2629.12, 15000),
++            (2202.77, 18000), (1857.7, 21000), (1397.44, 26000), (1121, 31000), (842.77, 37000),
++            (593.62, 45000), (395.63, 55000), (263.95, 66000), (170.72, 80000), (110.03, 96000),
++            (68.63, 116000), (42.65, 140000), (25.85, 169000), (14.67, 205000), (7.91, 247000),
++            (3.79, 298000), (2.08, 360246),
++        };
++
++        private static readonly (double PP, int Rank)[] catch_rank_curve =
++        {
++            (28004.3, 1), (27197.1, 2), (27079.3, 3), (26275.5, 5), (25204.9, 7),
++            (24319.1, 11), (22975.6, 16), (21836.4, 25), (21072.6, 37), (20250.4, 55),
++            (19343.2, 82), (18419.1, 122), (16880.1, 182), (15059.7, 272), (13287, 406),
++            (11374.4, 606), (9462.41, 905), (7835.87, 1350), (6135.53, 2015), (4673.21, 3008),
++            (3534.09, 4489), (2632.3, 6700), (1964.87, 10000), (1644.88, 12000), (1405.63, 14000),
++            (1149.84, 17000), (892.29, 21000), (685.23, 25000), (520.73, 29000), (355.6, 35000),
++            (225.83, 42000), (141.85, 50000), (89.83, 60000), (57.86, 72000), (38.12, 87000),
++            (25.85, 104000), (17.79, 124000), (12.28, 149000), (8.51, 178000), (5.71, 213000),
++            (3.49, 255000), (2.08, 304984),
++        };
++
++        private static readonly (double PP, int Rank)[] mania_rank_curve =
++        {
++            (30419.3, 1), (29184.6, 2), (29117.4, 3), (27723.2, 5), (27400.2, 7),
++            (26927.6, 11), (26384.2, 16), (25285.6, 25), (24942.8, 37), (23869.7, 55),
++            (22649.3, 82), (21407.7, 122), (20071.5, 182), (18583.9, 272), (17354.1, 406),
++            (16435.9, 606), (15539.5, 905), (14559.2, 1350), (13505.3, 2015), (12387.1, 3008),
++            (11252, 4489), (10152.3, 6700), (9035.01, 10000), (8168.33, 13000), (7611.9, 16000),
++            (6821.64, 21000), (6033.29, 27000), (5431.09, 34000), (4795.08, 44000), (4227.98, 56000),
++            (3662.59, 71000), (3079.73, 91000), (2539.8, 116000), (1976.19, 149000), (1542.07, 190000),
++            (1115.49, 243000), (730.4, 310000), (413.19, 396000), (170.47, 507000), (48.65, 647000),
++            (9.61, 827000), (2.08, 1057404),
++        };
++
++        private static (double PP, int Rank)[]? rankCurve(string ruleset) => ruleset switch
++        {
++            @"osu" => osu_rank_curve,
++            @"taiko" => taiko_rank_curve,
++            @"fruits" => catch_rank_curve,
++            @"mania" => mania_rank_curve,
++            _ => null,
 +        };
 +
 +        /// <summary>
-+        /// Estimated global rank for a total PP value, by linear interpolation along a sampled PP-to-rank curve.
-+        /// Past the curve's best sample, the rank keeps falling at the rate of its last two samples (exponentially, down to #1).
++        /// Whether global ranks are estimated for this ruleset (the four built-in ones).
 +        /// </summary>
-+        public static int EstimateGlobalRank(double pp)
-+        {
-+            if (pp <= rank_curve[0].PP)
-+                return rank_curve[0].Rank;
-+            if (pp >= rank_curve[^1].PP)
-+                return Math.Max(1, (int)Math.Round(rank_curve[^1].Rank * Math.Exp(top_rank_decay * (pp - rank_curve[^1].PP))));
++        public static bool HasRankEstimate(string ruleset) => rankCurve(ruleset) != null;
 +
-+            for (int i = 1; i < rank_curve.Length; i++)
++        /// <summary>
++        /// Estimated global rank for a total PP value, or null for a ruleset without a curve.
++        /// Interpolates ln(rank) linearly between the two nearest samples; more PP than the best sample is #1.
++        /// </summary>
++        public static int? EstimateGlobalRank(string ruleset, double pp)
++        {
++            if (rankCurve(ruleset) is not { } curve)
++                return null;
++
++            if (pp >= curve[0].PP)
++                return 1;
++
++            for (int i = 1; i < curve.Length; i++)
 +            {
-+                if (pp > rank_curve[i].PP)
++                if (pp < curve[i].PP)
 +                    continue;
 +
-+                var previous = rank_curve[i - 1];
-+                var next = rank_curve[i];
-+                double progress = (pp - previous.PP) / (next.PP - previous.PP);
-+                return (int)Math.Round(previous.Rank + (next.Rank - previous.Rank) * progress);
++                var better = curve[i - 1];
++                var worse = curve[i];
++                double progress = (pp - worse.PP) / (better.PP - worse.PP);
++                return (int)Math.Round(Math.Exp(Math.Log(worse.Rank) + (Math.Log(better.Rank) - Math.Log(worse.Rank)) * progress));
 +            }
 +
-+            return rank_curve[^1].Rank;
++            return curve[^1].Rank;
 +        }
 +
 +        /// <summary>
-+        /// How fast ln(rank) falls per PP above the curve's best sample (from its last two samples).
++        /// The least whole PP whose <see cref="EstimateGlobalRank"/> is <paramref name="rank"/> or better (the inverse of the estimate),
++        /// or null for a ruleset without a curve.
 +        /// </summary>
-+        private static readonly double top_rank_decay =
-+            Math.Log((double)rank_curve[^1].Rank / rank_curve[^2].Rank) / (rank_curve[^1].PP - rank_curve[^2].PP);
-+
-+        /// <summary>
-+        /// The least whole PP whose <see cref="EstimateGlobalRank"/> is <paramref name="rank"/> or better (the inverse of the estimate).
-+        /// </summary>
-+        public static double EstimatePPForRank(int rank)
++        public static double? EstimatePPForRank(string ruleset, int rank)
 +        {
++            if (rankCurve(ruleset) is not { } curve)
++                return null;
++
 +            rank = Math.Max(1, rank);
 +
 +            // Any PP at all gets the lowest estimated rank.
-+            if (rank >= rank_curve[0].Rank)
++            if (rank >= curve[^1].Rank)
 +                return 1;
 +
-+            double pp;
++            int i = 0;
++            while (curve[i].Rank < rank)
++                i++;
 +
-+            if (rank <= rank_curve[^1].Rank)
-+                pp = rank_curve[^1].PP + Math.Log((rank + 0.5) / rank_curve[^1].Rank) / top_rank_decay;
-+            else
++            double pp = curve[i].PP;
++
++            if (i > 0 && curve[i].Rank > rank)
 +            {
-+                int i = 1;
-+                while (rank_curve[i].Rank > rank)
-+                    i++;
-+
-+                var previous = rank_curve[i - 1];
-+                var next = rank_curve[i];
-+                pp = previous.PP + (next.PP - previous.PP) * (previous.Rank - rank) / (previous.Rank - next.Rank);
++                var better = curve[i - 1];
++                var worse = curve[i];
++                pp = worse.PP + (better.PP - worse.PP) * (Math.Log(worse.Rank) - Math.Log(rank)) / (Math.Log(worse.Rank) - Math.Log(better.Rank));
 +            }
 +
 +            // The estimate rounds the rank, so settle on the first whole PP that really gets there.
 +            pp = Math.Max(Math.Ceiling(pp), 1);
-+            while (pp > 1 && EstimateGlobalRank(pp - 1) <= rank)
++            while (pp > 1 && EstimateGlobalRank(ruleset, pp - 1) <= rank)
 +                pp--;
-+            while (EstimateGlobalRank(pp) > rank)
++            while (EstimateGlobalRank(ruleset, pp) > rank)
 +                pp++;
 +
 +            return pp;
@@ -1822,10 +2215,10 @@ index 0000000000..365a4d7a41
 +}
 diff --git a/osu.Game/LocalPriority/LocalPrioritySection.cs b/osu.Game/LocalPriority/LocalPrioritySection.cs
 new file mode 100644
-index 0000000000..29a8526a8a
+index 0000000000..9068c827e7
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalPrioritySection.cs
-@@ -0,0 +1,697 @@
+@@ -0,0 +1,758 @@
 +using System;
 +using System.Collections.Generic;
 +using System.Linq;
@@ -1935,6 +2328,9 @@ index 0000000000..29a8526a8a
 +        private SettingsButtonV2 resetDeathCountsButton = null!;
 +        private readonly IBindable<int> revision = new Bindable<int>();
 +        private readonly IBindable<bool> useOnlineAccount = new Bindable<bool>();
++        private readonly IBindable<string> apiClientId = new Bindable<string>();
++        private readonly IBindable<bool> coolingDown = new Bindable<bool>();
++        private readonly IBindable<string> apiClientSecret = new Bindable<string>();
 +
 +        [Resolved(canBeNull: true)]
 +        private SettingsOverlay? settingsOverlay { get; set; }
@@ -1956,7 +2352,8 @@ index 0000000000..29a8526a8a
 +        }
 +
 +        /// <summary>
-+        /// Greyed out like a disabled button while online lookups are off, but still clickable (it leads to that setting).
++        /// Greyed out like a disabled button while online lookups are off (and there's no API key) or while waiting after the last fetch,
++        /// but still clickable: it leads to that setting, or says how long the wait still is.
 +        /// Runs after the button's own colour updates (on load and when it is enabled or disabled), which would undo it.
 +        /// </summary>
 +        private void updateFetchTopPlaysDim()
@@ -1964,16 +2361,22 @@ index 0000000000..29a8526a8a
 +            if (!fetchTopPlaysButton.IsLoaded)
 +                return;
 +
-+            bool dim = !fetchTopPlaysButton.Enabled.Value || !useOnlineAccount.Value;
++            bool dim = !fetchTopPlaysButton.Enabled.Value || !canFetchTopPlays || coolingDown.Value;
 +            fetchTopPlaysButton.FadeColour(dim ? Color4.Gray : Color4.White, 200, Easing.OutQuint);
 +        }
++
++        /// <summary>
++        /// Online lookups are on (the signed-in account is used for your own plays) or there is an API key (for anybody's).
++        /// </summary>
++        private bool canFetchTopPlays => useOnlineAccount.Value || manager.HasBanchoApiKey;
 +
 +        private void fetchTopPlays()
 +        {
 +            if (activeProfile.Value == null)
 +                return;
 +
-+            if (useOnlineAccount.Value)
++            // While waiting after the last fetch, the manager only says how long is left.
++            if (canFetchTopPlays || coolingDown.Value)
 +            {
 +                manager.FetchBanchoTopPlays(activeProfile.Value.Id);
 +                return;
@@ -2014,6 +2417,14 @@ index 0000000000..29a8526a8a
 +
 +            useOnlineAccount.BindTo(manager.LocalProfilesUseOnlineAccount);
 +            useOnlineAccount.BindValueChanged(_ => updateFetchTopPlaysButton(), true);
++
++            coolingDown.BindTo(manager.BanchoFetchCoolingDown);
++            coolingDown.BindValueChanged(_ => Scheduler.AddOnce(updateFetchTopPlaysDim));
++
++            apiClientId.BindTo(manager.BanchoApiClientId);
++            apiClientSecret.BindTo(manager.BanchoApiClientSecret);
++            apiClientId.BindValueChanged(_ => Scheduler.AddOnce(updateFetchTopPlaysDim));
++            apiClientSecret.BindValueChanged(_ => Scheduler.AddOnce(updateFetchTopPlaysDim));
 +
 +            revision.BindTo(manager.Revision);
 +            revision.BindValueChanged(_ => Scheduler.AddOnce(updateDeathCountsButton), true);
@@ -2073,8 +2484,10 @@ index 0000000000..29a8526a8a
 +                },
 +                fetchTopPlaysButton = new SettingsButtonV2
 +                {
-+                    TooltipText = @"Adds the best plays (current mode) of the osu! player with this profile's name, without replays. "
-+                                  + @"Asks before downloading the beatmaps you don't have. Needs online lookups (below) and your online account signed in.",
++                    TooltipText = @"Adds the best plays (current mode) of the osu! player with this profile's name, with the replays osu! has. "
++                                  + @"Asks before downloading the beatmaps you don't have. Your own plays use your signed-in account (online lookups, below); "
++                                  + @"another player's need your own osu! API key (below). Asks before fetching. Requests are sent at most once a second, "
++                                  + $@"and after a fetch finishes the next one waits {LocalProfileManager.BANCHO_FETCH_COOLDOWN_MINUTES} minutes.",
 +                    Keywords = new[] { @"bancho", @"online", @"top", @"best", @"plays", @"scores", @"fetch", @"import", @"download" },
 +                    Action = fetchTopPlays,
 +                },
@@ -2180,6 +2593,7 @@ index 0000000000..29a8526a8a
 +                }),
 +                new LocalProfileColourSettings(),
 +                new LocalOnlineLookupSettings(),
++                new LocalBanchoApiKeySettings(),
 +            };
 +
 +            // After the button's own LoadComplete / Enabled handling, which set its colour.
@@ -2418,6 +2832,46 @@ index 0000000000..29a8526a8a
 +    /// <summary>
 +    /// Whether local profiles may use the signed-in online account for read-only lookups (beatmaps, tags, leaderboards).
 +    /// </summary>
++    /// <summary>
++    /// The user's own osu! API key: fetching another player's top plays uses it instead of the signed-in account.
++    /// </summary>
++    public partial class LocalBanchoApiKeySettings : LocalSettingsGroup
++    {
++        public LocalBanchoApiKeySettings()
++            : base(@"osu! API key for other players' plays")
++        {
++        }
++
++        protected override IEnumerable<LocalisableString> Keywords => new LocalisableString[]
++        {
++            @"api", @"key", @"oauth", @"client", @"secret", @"token", @"bancho", @"fetch", @"top", @"plays",
++        };
++
++        [Resolved]
++        private LocalProfileManager manager { get; set; } = null!;
++
++        [BackgroundDependencyLoader]
++        private void load()
++        {
++            Children = new Drawable[]
++            {
++                new SettingsItemV2(new FormTextBox
++                {
++                    Caption = @"Client ID",
++                    HintText = @"Make one on osu.ppy.sh → Settings → OAuth → New OAuth Application (any name, no callback URL needed). "
++                               + @"""Fetch top plays"" uses it for any player other than your signed-in account, so your account never asks for someone else's plays.",
++                    Current = manager.BanchoApiClientId,
++                }),
++                new SettingsItemV2(new FormPasswordTextBox
++                {
++                    Caption = @"Client secret",
++                    HintText = @"Kept in PatchsuSettings.json on this computer and only sent to osu!. Don't share it.",
++                    Current = manager.BanchoApiClientSecret,
++                }),
++            };
++        }
++    }
++
 +    public partial class LocalOnlineLookupSettings : LocalSettingsGroup
 +    {
 +        public LocalOnlineLookupSettings()
@@ -2525,7 +2979,7 @@ index 0000000000..29a8526a8a
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileAvatar.cs b/osu.Game/LocalPriority/LocalProfileAvatar.cs
 new file mode 100644
-index 0000000000..b3b72e7299
+index 0000000000..549a11e9d1
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileAvatar.cs
 @@ -0,0 +1,63 @@
@@ -2967,19 +3421,22 @@ index 0000000000..887ff0d388
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileManager.BanchoImport.cs b/osu.Game/LocalPriority/LocalProfileManager.BanchoImport.cs
 new file mode 100644
-index 0000000000..ec273665ab
+index 0000000000..63c329ef79
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileManager.BanchoImport.cs
-@@ -0,0 +1,939 @@
+@@ -0,0 +1,1145 @@
 +using System;
 +using System.Collections.Generic;
++using System.Globalization;
 +using System.Linq;
 +using System.Threading;
 +using System.Threading.Tasks;
 +using Newtonsoft.Json;
 +using osu.Framework.Allocation;
++using osu.Framework.Bindables;
 +using osu.Framework.Graphics.Sprites;
 +using osu.Framework.Logging;
++using osu.Framework.Threading;
 +using osu.Game.Beatmaps;
 +using osu.Game.Configuration;
 +using osu.Game.Online.API;
@@ -3025,8 +3482,138 @@ index 0000000000..ec273665ab
 +        private volatile bool banchoImportRunning;
 +
 +        /// <summary>
++        /// The user's own osu! API key (an OAuth application's client ID and secret), for other players' plays.
++        /// Settings → Patchsu → Patch 2, kept in the "LocalProfiles" section of PatchsuSettings.json.
++        /// </summary>
++        public Bindable<string> BanchoApiClientId { get; } = PatchsuSettings.Current.GetBindable(@"LocalProfiles", @"ApiClientId", string.Empty);
++
++        /// <inheritdoc cref="BanchoApiClientId"/>
++        public Bindable<string> BanchoApiClientSecret { get; } = PatchsuSettings.Current.GetBindable(@"LocalProfiles", @"ApiClientSecret", string.Empty);
++
++        /// <summary>
++        /// After a confirmed fetch ends (its beatmap and replay downloads included), the next one waits this long.
++        /// </summary>
++        public const int BANCHO_FETCH_COOLDOWN_MINUTES = 10;
++
++        /// <summary>
++        /// When the last confirmed fetch ended (UTC, round-trip format), so the wait survives restarts.
++        /// </summary>
++        private readonly Bindable<string> lastBanchoFetchEnded = PatchsuSettings.Current.GetBindable(@"LocalProfiles", @"TopPlaysFetchEndedAt", string.Empty);
++
++        /// <summary>
++        /// The player was found and the user confirmed the fetch: its end starts the wait.
++        /// </summary>
++        private volatile bool banchoFetchConfirmed;
++
++        /// <summary>
++        /// How long until top plays can be fetched again (zero when they can). Never more than the full wait, even if the clock went back.
++        /// </summary>
++        public TimeSpan BanchoFetchCooldownLeft
++        {
++            get
++            {
++                if (!DateTimeOffset.TryParse(lastBanchoFetchEnded.Value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ended))
++                    return TimeSpan.Zero;
++
++                var cooldown = TimeSpan.FromMinutes(BANCHO_FETCH_COOLDOWN_MINUTES);
++                var left = ended + cooldown - DateTimeOffset.UtcNow;
++                return left <= TimeSpan.Zero ? TimeSpan.Zero : left > cooldown ? cooldown : left;
++            }
++        }
++
++        private readonly BindableBool banchoFetchCoolingDown = new BindableBool();
++
++        /// <summary>
++        /// True while <see cref="BanchoFetchCooldownLeft"/> isn't zero (the fetch button looks unclickable). Changes on the update thread.
++        /// </summary>
++        public IBindable<bool> BanchoFetchCoolingDown => banchoFetchCoolingDown;
++
++        private ScheduledDelegate? banchoFetchCooldownEnd;
++
++        /// <summary>
++        /// Called from <see cref="LoadComplete"/>: follows the saved end time (written from the fetch's thread) on the update thread.
++        /// </summary>
++        private void trackBanchoFetchCooldown() =>
++            lastBanchoFetchEnded.BindValueChanged(_ => Scheduler.AddOnce(updateBanchoFetchCooldown), true);
++
++        private void updateBanchoFetchCooldown()
++        {
++            banchoFetchCooldownEnd?.Cancel();
++
++            var left = BanchoFetchCooldownLeft;
++            banchoFetchCoolingDown.Value = left > TimeSpan.Zero;
++
++            if (left > TimeSpan.Zero)
++                banchoFetchCooldownEnd = Scheduler.AddDelayed(updateBanchoFetchCooldown, left.TotalMilliseconds + 50);
++        }
++
++        /// <summary>
++        /// Tests: lets the next fetch start right away.
++        /// </summary>
++        internal void ResetBanchoFetchCooldown() => lastBanchoFetchEnded.Value = string.Empty;
++
++        public bool HasBanchoApiKey => !string.IsNullOrWhiteSpace(BanchoApiClientId.Value) && !string.IsNullOrWhiteSpace(BanchoApiClientSecret.Value);
++
++        /// <summary>
++        /// Tests: used instead of the real osu! API when the API key is used.
++        /// </summary>
++        internal IBanchoPlaySource? ApiKeySourceOverride { get; set; }
++
++        /// <summary>
++        /// The signed-in online account (kept apart while a local profile is the player), or null.
++        /// </summary>
++        private APIUser? signedInAccount
++        {
++            get
++            {
++                if (api.State.Value != APIState.Online)
++                    return null;
++
++                var account = IsLocalProfileActive ? LocalPriorityPolicy.OnlineAccountUser : api.LocalUser.Value;
++                return account != null && account.Id > 1 && !LocalPriorityPolicy.IsOfflineProfileUser(account) ? account : null;
++            }
++        }
++
++        /// <summary>
++        /// osu! treats spaces and underscores in usernames the same, and ignores case.
++        /// </summary>
++        private static bool sameOsuUsername(string a, string b) =>
++            string.Equals(a.Trim().Replace(' ', '_'), b.Trim().Replace(' ', '_'), StringComparison.OrdinalIgnoreCase);
++
++        /// <summary>
++        /// Where the profile's plays come from: the signed-in account if it is the player named like the profile, else the user's own
++        /// API key (never the account for somebody else's plays), or null with the reason when neither can be used.
++        /// </summary>
++        private IBanchoPlaySource? pickBanchoSource(LocalProfile profile, out string? reason)
++        {
++            reason = null;
++            var account = signedInAccount;
++
++            if (account != null && sameOsuUsername(account.Username, profile.Name))
++                return new AccountBanchoPlaySource(api);
++
++            if (HasBanchoApiKey)
++                return ApiKeySourceOverride ?? new ApiKeyBanchoPlaySource(api.Endpoints.APIUrl, api.APIVersion, BanchoApiClientId.Value, BanchoApiClientSecret.Value);
++
++            if (account != null)
++            {
++                reason = $@"""{profile.Name}"" isn't your signed-in osu! account ({account.Username}). To fetch another player's plays, "
++                         + @"add your own osu! API key in Settings → Patchsu → Patch 2.";
++            }
++            else
++            {
++                reason = IsLocalProfileActive && !LocalProfilesUseOnlineAccount.Value
++                    ? @"Fetching top plays needs your online account (sign in to it and turn on ""Use your online account for beatmap and leaderboard requests"" in Settings → Patchsu → Patch 2) or your own osu! API key (same place)."
++                    : @"Fetching top plays needs your online account or your own osu! API key (Settings → Patchsu → Patch 2). Sign in first.";
++            }
++
++            return null;
++        }
++
++        /// <summary>
 +        /// Asks osu! for the best plays (in the current mode) of the player named like the profile and adds them to the profile.
-+        /// Needs the online account signed in and, while a local profile is active, Settings → Patchsu → "Use your online account…".
++        /// Your own plays go through the signed-in account (while a local profile is active, with "Use your online account…" on);
++        /// anybody else's need your own API key (<see cref="pickBanchoSource"/>). Beatmaps are downloaded with the signed-in account only.
 +        /// </summary>
 +        public void FetchBanchoTopPlays(Guid profileId)
 +        {
@@ -3042,15 +3629,25 @@ index 0000000000..ec273665ab
 +                return;
 +            }
 +
-+            if (api.State.Value != APIState.Online)
++            var cooldownLeft = BanchoFetchCooldownLeft;
++
++            if (cooldownLeft > TimeSpan.Zero)
 +            {
-+                postBanchoMessage(IsLocalProfileActive && !LocalProfilesUseOnlineAccount.Value
-+                    ? @"Fetching top plays needs your online account: sign in to it and turn on ""Use your online account for beatmap and leaderboard requests"" in Settings → Patchsu → Patch 2."
-+                    : @"Fetching top plays needs your online account. Sign in first.");
++                postBanchoMessage($@"Top plays can be fetched once every {BANCHO_FETCH_COOLDOWN_MINUTES} minutes, counted from when the last fetch finished. "
++                                  + $@"Try again in {formatCooldown(cooldownLeft)}.");
++                return;
++            }
++
++            var source = pickBanchoSource(profile, out string? reason);
++
++            if (source == null)
++            {
++                postBanchoMessage(reason!);
 +                return;
 +            }
 +
 +            banchoImportRunning = true;
++            banchoFetchConfirmed = false;
 +
 +            var notification = new BanchoFetchNotification
 +            {
@@ -3072,17 +3669,22 @@ index 0000000000..ec273665ab
 +            {
 +                try
 +                {
-+                    var plays = await fetchBanchoTopPlays(profile.Name, ruleset, notification, cancellation.Token).ConfigureAwait(false);
++                    var plays = await fetchBanchoTopPlays(source, profile, ruleset, notification, cancellation.Token).ConfigureAwait(false);
 +
 +                    if (plays == null)
 +                        return;
 +
 +                    var tcs = new TaskCompletionSource<bool>();
-+                    Schedule(() => prepareBanchoImport(profile, ruleset, plays, notification, cancellation, tcs));
++                    Schedule(() => prepareBanchoImport(source, profile, ruleset, plays, notification, cancellation, tcs));
 +                    await tcs.Task.ConfigureAwait(false);
 +                }
 +                catch (OperationCanceledException)
 +                {
++                    notification.State = ProgressNotificationState.Cancelled;
++                }
++                catch (BanchoApiKeyRejectedException e)
++                {
++                    notification.Text = e.Message;
 +                    notification.State = ProgressNotificationState.Cancelled;
 +                }
 +                catch (Exception e)
@@ -3093,9 +3695,30 @@ index 0000000000..ec273665ab
 +                }
 +                finally
 +                {
++                    // A confirmed fetch starts the wait when it ends, downloads included (also when it was cancelled or failed).
++                    if (banchoFetchConfirmed)
++                        lastBanchoFetchEnded.Value = DateTimeOffset.UtcNow.ToString(@"o", CultureInfo.InvariantCulture);
++
 +                    banchoImportRunning = false;
 +                }
 +            });
++        }
++
++        /// <summary>
++        /// "7 minutes 5 seconds", "1 minute", "40 seconds" (whole seconds, rounded up).
++        /// </summary>
++        private static string formatCooldown(TimeSpan left)
++        {
++            int total = Math.Max(1, (int)Math.Ceiling(left.TotalSeconds));
++            int minutes = total / 60;
++            int seconds = total % 60;
++
++            static string unit(int n, string name) => $@"{n} {name}{(n == 1 ? string.Empty : @"s")}";
++
++            if (minutes == 0)
++                return unit(seconds, @"second");
++
++            return seconds == 0 ? unit(minutes, @"minute") : $@"{unit(minutes, @"minute")} {unit(seconds, @"second")}";
 +        }
 +
 +        private void postBanchoMessage(string text) => PostNotification?.Invoke(new SimpleNotification
@@ -3107,9 +3730,11 @@ index 0000000000..ec273665ab
 +        /// <summary>
 +        /// The player's best plays in the mode, or null (with the notification closed / telling why) if there are none.
 +        /// </summary>
-+        private async Task<List<SoloScoreInfo>?> fetchBanchoTopPlays(string name, RulesetInfo ruleset, ProgressNotification notification, CancellationToken token)
++        private async Task<List<SoloScoreInfo>?> fetchBanchoTopPlays(IBanchoPlaySource source, LocalProfile profile, RulesetInfo ruleset, ProgressNotification notification,
++                                                                     CancellationToken token)
 +        {
-+            var user = await performBanchoRequest<APIUser>(new GetUserRequest(name, ruleset), token).ConfigureAwait(false);
++            string name = profile.Name;
++            var user = await source.GetUser(name, ruleset, token).ConfigureAwait(false);
 +
 +            if (user == null || user.Id <= 1)
 +            {
@@ -3118,14 +3743,23 @@ index 0000000000..ec273665ab
 +                return null;
 +            }
 +
++            notification.Text = $@"Found {user.Username} on osu!. Confirm the fetch...";
++
++            if (!await confirmBanchoFetch(source, user, profile, ruleset, token).ConfigureAwait(false))
++            {
++                notification.Text = $@"Top plays of {user.Username} not fetched.";
++                notification.State = ProgressNotificationState.Cancelled;
++                return null;
++            }
++
++            banchoFetchConfirmed = true;
 +            notification.Text = $@"Fetching the top plays of {user.Username} ({ruleset.Name})...";
 +
 +            var plays = new List<SoloScoreInfo>();
 +
 +            for (int offset = 0; offset < BANCHO_TOP_PLAYS; offset += bancho_page_size)
 +            {
-+                var page = await performBanchoRequest<List<SoloScoreInfo>>(
-+                    new GetUserScoresRequest(user.Id, ScoreType.Best, new PaginationParameters(offset, bancho_page_size), ruleset), token).ConfigureAwait(false);
++                var page = await source.GetBestPlays(user.Id, ruleset, offset, bancho_page_size, token).ConfigureAwait(false);
 +
 +                if (page == null || page.Count == 0)
 +                    break;
@@ -3151,41 +3785,32 @@ index 0000000000..ec273665ab
 +        }
 +
 +        /// <summary>
-+        /// Queues the request and waits for its response (null when it failed; cancelling the token cancels it).
++        /// Asks whether to go on now that the player is found (nothing else is sent before). Dismissing the dialog says no.
 +        /// </summary>
-+        private async Task<T?> performBanchoRequest<T>(APIRequest<T> request, CancellationToken token)
-+            where T : class
++        private async Task<bool> confirmBanchoFetch(IBanchoPlaySource source, APIUser user, LocalProfile profile, RulesetInfo ruleset, CancellationToken token)
 +        {
-+            var tcs = new TaskCompletionSource<T?>(TaskCreationOptions.RunContinuationsAsynchronously);
++            var dialogs = dialogOverlay;
 +
-+            request.Success += response => tcs.TrySetResult(response);
-+            request.Failure += e =>
-+            {
-+                if (e is OperationCanceledException)
-+                    tcs.TrySetCanceled();
-+                else
-+                {
-+                    Logger.Log($@"Patchsu: {request.GetType().Name} failed: {e.Message}");
-+                    tcs.TrySetResult(null);
-+                }
-+            };
++            if (dialogs == null)
++                return true;
 +
-+            await using (token.Register(request.Cancel))
-+            {
-+                api.Queue(request);
-+                var result = await tcs.Task.ConfigureAwait(false);
-+                token.ThrowIfCancellationRequested();
-+                return result;
-+            }
++            var answer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
++            string via = source is AccountBanchoPlaySource ? @"your signed-in account" : @"your osu! API key";
++
++            Schedule(() => dialogs.Push(new BanchoConfirmDialog(user.Username, profile.Name, ruleset.Name, via,
++                () => answer.TrySetResult(true), () => answer.TrySetResult(false))));
++
++            await using (token.Register(() => answer.TrySetCanceled()))
++                return await answer.Task.ConfigureAwait(false);
 +        }
 +
 +        /// <summary>
 +        /// Adds the plays whose beatmaps are imported, then asks whether to download the others' beatmaps. Runs on the update thread.
 +        /// </summary>
-+        private void prepareBanchoImport(LocalProfile profile, RulesetInfo ruleset, List<SoloScoreInfo> plays, ProgressNotification notification,
++        private void prepareBanchoImport(IBanchoPlaySource source, LocalProfile profile, RulesetInfo ruleset, List<SoloScoreInfo> plays, ProgressNotification notification,
 +                                         CancellationTokenSource cancellation, TaskCompletionSource<bool> done)
 +        {
-+            var run = new BanchoImportRun(profile, ruleset, plays, cancellation.Token, done);
++            var run = new BanchoImportRun(source, profile, ruleset, plays, cancellation.Token, done);
 +            var found = findBanchoBeatmaps(plays);
 +
 +            var ready = plays.Where(p => found.ContainsKey(p)).ToList();
@@ -3204,6 +3829,14 @@ index 0000000000..ec273665ab
 +            if (sets.Count == 0 || beatmapManager == null)
 +            {
 +                run.Unavailable += missing.Count;
++                finishBanchoImport(run, notification);
++                return;
++            }
++
++            // Beatmaps are only downloaded with the signed-in account (like osu!'s own downloads), never with the API key.
++            if (signedInAccount == null)
++            {
++                run.NoAccount += missing.Count;
 +                finishBanchoImport(run, notification);
 +                return;
 +            }
@@ -3359,26 +3992,7 @@ index 0000000000..ec273665ab
 +            var request = new DownloadBeatmapSetRequest(set, noVideo);
 +            request.DownloadProgressed += progressed;
 +
-+            var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-+            request.Success += filename => tcs.TrySetResult(filename);
-+            request.Failure += e =>
-+            {
-+                if (e is OperationCanceledException)
-+                    tcs.TrySetCanceled();
-+                else
-+                {
-+                    Logger.Log($@"Patchsu: downloading beatmap set {id} failed: {e.Message}");
-+                    tcs.TrySetResult(null);
-+                }
-+            };
-+
-+            string? file;
-+
-+            await using (token.Register(request.Cancel))
-+            {
-+                api.Queue(request);
-+                file = await tcs.Task.ConfigureAwait(false);
-+            }
++            string? file = await AccountBanchoPlaySource.PerformDownload(api, request, token).ConfigureAwait(false);
 +
 +            if (file == null)
 +                return false;
@@ -3514,6 +4128,8 @@ index 0000000000..ec273665ab
 +                    score.OnlineID = -1;
 +                    score.LegacyOnlineID = -1;
 +                    score.HasOnlineReplay = false;
++                    // osu!'s PP comes from its own (often older) calculation: calculated here like every other local score.
++                    score.PP = null;
 +                    score.Ruleset = ruleset;
 +                    // The score only links to its beatmap while this matches the beatmap's file hash (PP, leaderboards, the profile).
 +                    score.BeatmapHash = beatmap.Hash;
@@ -3612,6 +4228,34 @@ index 0000000000..ec273665ab
 +        }
 +
 +        /// <summary>
++        /// Plays fetched by earlier versions without a replay kept osu!'s PP, so sorting leaderboards by PP mixed it with the PP
++        /// calculated here. Clears it once (same plays as <see cref="migrateBanchoScores"/>). Called once the manager is loaded.
++        /// </summary>
++        private void clearBanchoScoresPP()
++        {
++            if (!Store.TakeMigration(3))
++                return;
++
++            var profileUserIds = Store.GetProfiles().Select(p => p.UserId).ToHashSet();
++            int cleared = 0;
++
++            realm.Write(r =>
++            {
++                foreach (var s in r.All<ScoreInfo>().Filter($@"{nameof(ScoreInfo.PP)} != nil AND {nameof(ScoreInfo.OnlineID)} <= 0 AND {nameof(ScoreInfo.Files)}.@count == 0").ToList())
++                {
++                    if (!profileUserIds.Contains(s.RealmUser.OnlineID))
++                        continue;
++
++                    s.PP = null;
++                    cleared++;
++                }
++            });
++
++            if (cleared > 0)
++                Logger.Log($@"Patchsu: cleared osu!'s PP from {cleared} play(s) fetched from osu!.");
++        }
++
++        /// <summary>
 +        /// The plays are in: downloads the replays osu! has for them (plays without one so far only), then completes. Update thread.
 +        /// </summary>
 +        private void finishBanchoImport(BanchoImportRun run, ProgressNotification notification)
@@ -3674,7 +4318,7 @@ index 0000000000..ec273665ab
 +
 +                    try
 +                    {
-+                        importedId = await downloadBanchoReplay(play, token).ConfigureAwait(false);
++                        importedId = await downloadBanchoReplay(run.Source, play, token).ConfigureAwait(false);
 +                    }
 +                    catch (OperationCanceledException)
 +                    {
@@ -3710,30 +4354,9 @@ index 0000000000..ec273665ab
 +        /// <summary>
 +        /// Downloads one replay and imports it without a notification. The imported score's ID, or null.
 +        /// </summary>
-+        private async Task<Guid?> downloadBanchoReplay(SoloScoreInfo play, CancellationToken token)
++        private async Task<Guid?> downloadBanchoReplay(IBanchoPlaySource source, SoloScoreInfo play, CancellationToken token)
 +        {
-+            var request = new DownloadReplayRequest(play);
-+            var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-+
-+            request.Success += filename => tcs.TrySetResult(filename);
-+            request.Failure += e =>
-+            {
-+                if (e is OperationCanceledException)
-+                    tcs.TrySetCanceled();
-+                else
-+                {
-+                    Logger.Log($@"Patchsu: downloading the replay of score {play.OnlineID} failed: {e.Message}");
-+                    tcs.TrySetResult(null);
-+                }
-+            };
-+
-+            string? file;
-+
-+            await using (token.Register(request.Cancel))
-+            {
-+                api.Queue(request);
-+                file = await tcs.Task.ConfigureAwait(false);
-+            }
++            string? file = await source.DownloadReplay(play, token).ConfigureAwait(false);
 +
 +            if (file == null)
 +                return null;
@@ -3818,6 +4441,9 @@ index 0000000000..ec273665ab
 +            if (run.Skipped > 0)
 +                parts.Add($@"{run.Skipped:N0} skipped (beatmap not downloaded).");
 +
++            if (run.NoAccount > 0)
++                parts.Add($@"{run.NoAccount:N0} skipped (sign in to download their beatmaps).");
++
 +            if (run.Unavailable > 0)
 +                parts.Add($@"{run.Unavailable:N0} could not be added (beatmap unavailable or changed since).");
 +
@@ -3829,6 +4455,11 @@ index 0000000000..ec273665ab
 +
 +        private class BanchoImportRun
 +        {
++            /// <summary>
++            /// Where the plays and their replays come from.
++            /// </summary>
++            public readonly IBanchoPlaySource Source;
++
 +            public readonly LocalProfile Profile;
 +            public readonly RulesetInfo Ruleset;
 +            public readonly int Total;
@@ -3846,12 +4477,15 @@ index 0000000000..ec273665ab
 +            public int Added;
 +            public int AlreadyThere;
 +            public int Skipped;
++            public int NoAccount;
 +            public int Unavailable;
 +            public int ReplaysAdded;
 +            public int ReplaysSkipped;
 +
-+            public BanchoImportRun(LocalProfile profile, RulesetInfo ruleset, IReadOnlyList<SoloScoreInfo> plays, CancellationToken token, TaskCompletionSource<bool> done)
++            public BanchoImportRun(IBanchoPlaySource source, LocalProfile profile, RulesetInfo ruleset, IReadOnlyList<SoloScoreInfo> plays, CancellationToken token,
++                                   TaskCompletionSource<bool> done)
 +            {
++                Source = source;
 +                Profile = profile;
 +                Ruleset = ruleset;
 +                Total = plays.Count;
@@ -3883,6 +4517,32 @@ index 0000000000..ec273665ab
 +        /// <summary>
 +        /// Closing it without a button (Escape, clicking outside) presses the last one: skip.
 +        /// </summary>
++        private partial class BanchoConfirmDialog : PopupDialog
++        {
++            public BanchoConfirmDialog(string username, string profileName, string rulesetName, string via, Action fetch, Action decline)
++            {
++                Icon = FontAwesome.Solid.Trophy;
++                HeaderText = $@"Fetch the top plays of {username}?";
++                BodyText = $@"Adds up to {BANCHO_TOP_PLAYS} best plays ({rulesetName}) for ""{profileName}"" from account with same name, with the replays Bancho has, "
++                           + $@"through {via}. You'll be asked before any beatmap is downloaded. "
++                           + $@"Once this finishes, top plays can't be fetched again for {BANCHO_FETCH_COOLDOWN_MINUTES} minutes.";
++
++                Buttons = new PopupDialogButton[]
++                {
++                    new PopupDialogOkButton
++                    {
++                        Text = @"Yes, fetch them",
++                        Action = fetch,
++                    },
++                    new PopupDialogCancelButton
++                    {
++                        Text = @"No",
++                        Action = decline,
++                    },
++                };
++            }
++        }
++
 +        private partial class BanchoDownloadDialog : PopupDialog
 +        {
 +            public BanchoDownloadDialog(string name, int ready, int missing, int sets, Action download, Action skip)
@@ -4036,7 +4696,7 @@ index 0000000000..008e03a7c3
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileManager.StatisticsUpdate.cs b/osu.Game/LocalPriority/LocalProfileManager.StatisticsUpdate.cs
 new file mode 100644
-index 0000000000..403c55e2bb
+index 0000000000..1b49fb8cae
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileManager.StatisticsUpdate.cs
 @@ -0,0 +1,244 @@
@@ -4262,8 +4922,8 @@ index 0000000000..403c55e2bb
 +        private static UserStatistics toUserStatistics(double pp, RulesetInfo ruleset) => new UserStatistics
 +        {
 +            PP = (decimal)pp,
-+            // Same estimate as the profile page: osu! standard only, and only once there is any PP.
-+            GlobalRank = ruleset.ShortName == @"osu" && pp > 0 ? LocalPriorityPolicy.EstimateGlobalRank(pp) : null,
++            // Same estimate as the profile page, only once there is any PP.
++            GlobalRank = pp > 0 ? LocalPriorityPolicy.EstimateGlobalRank(ruleset.ShortName, pp) : null,
 +        };
 +    }
 +
@@ -4286,10 +4946,10 @@ index 0000000000..403c55e2bb
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileManager.cs b/osu.Game/LocalPriority/LocalProfileManager.cs
 new file mode 100644
-index 0000000000..44a34b7436
+index 0000000000..c135600ff2
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileManager.cs
-@@ -0,0 +1,1944 @@
+@@ -0,0 +1,1946 @@
 +using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -4526,6 +5186,8 @@ index 0000000000..44a34b7436
 +
 +            repairScoresWithoutBeatmapHash();
 +            migrateBanchoScores();
++            clearBanchoScoresPP();
++            trackBanchoFetchCooldown();
 +
 +            // Any change to scores (saved, deleted, transferred, imported) can change PP.
 +            scoreSubscription = realm.RegisterForNotifications(r => r.All<ScoreInfo>(), (_, changes) =>
@@ -7535,10 +8197,10 @@ index 0000000000..80249a74d9
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileOverlay.cs b/osu.Game/LocalPriority/LocalProfileOverlay.cs
 new file mode 100644
-index 0000000000..090f4efcdf
+index 0000000000..7ffe131d43
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileOverlay.cs
-@@ -0,0 +1,4223 @@
+@@ -0,0 +1,4235 @@
 +using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -7558,6 +8220,7 @@ index 0000000000..090f4efcdf
 +using osu.Framework.Graphics.Containers;
 +using osu.Framework.Graphics.Cursor;
 +using osu.Framework.Graphics.Effects;
++using osu.Framework.Graphics.Primitives;
 +using osu.Framework.Graphics.Shapes;
 +using osu.Framework.Graphics.Sprites;
 +using osu.Framework.Graphics.UserInterface;
@@ -7856,17 +8519,20 @@ index 0000000000..090f4efcdf
 +
 +        /// <summary>
 +        /// "New 'Speedrun' profile": asks for the goal in a small window in the middle; the profile is made (and switched to) once it is confirmed.
-+        /// The goal counts the PP of the ruleset selected in the game.
++        /// The goal counts the PP of the ruleset shown on the page; starting the run selects that ruleset in the game too.
 +        /// </summary>
 +        private void showSpeedrunGoalWindow()
 +        {
-+            var ruleset = gameRuleset.Value?.IsLegacyRuleset() == true ? gameRuleset.Value : profileRuleset.Value;
++            var ruleset = profileRuleset.Value ?? gameRuleset.Value;
 +
 +            if (ruleset == null)
 +                return;
 +
 +            speedrunGoalLayer.Child = new LocalSpeedrunGoalWindow(ruleset, goal =>
 +            {
++                if (!mutableRuleset.Disabled && rulesets.GetRuleset(ruleset.ShortName) is RulesetInfo gameRulesetInfo && !mutableRuleset.Value.Equals(gameRulesetInfo))
++                    mutableRuleset.Value = gameRulesetInfo;
++
 +                displayedProfileId = null;
 +                var created = manager.CreateSpeedrunProfile(goal);
 +                manager.Switch(created.Id);
@@ -7950,6 +8616,14 @@ index 0000000000..090f4efcdf
 +            }
 +
 +            protected override bool RequiresChildrenUpdate => true;
++
++            // The frame buffer is a whole number of pixels. Drawn back into a fractional size, its nearest-pixel sampling drops or doubles a
++            // row (or column) of pixels at some positions (text looked cut off by a pixel). A whole-pixel size draws it 1:1.
++            protected override Quad ComputeScreenSpaceDrawQuad()
++            {
++                var rect = base.ComputeScreenSpaceDrawQuad().AABBFloat;
++                return Quad.FromRectangle(new RectangleF(rect.X, rect.Y, MathF.Round(rect.Width), MathF.Round(rect.Height)));
++            }
 +
 +            private Drawable[] contents = Array.Empty<Drawable>();
 +            private double contentsListedAt = double.NegativeInfinity;
@@ -10404,9 +11078,9 @@ index 0000000000..090f4efcdf
 +                                                    // Like the website's "Global Ranking" / "Country Ranking".
 +                                                    bigValue(@"Estimated Global Ranking",
 +                                                        stats?.EstimatedGlobalRank != null ? $@"#{stats.EstimatedGlobalRank:N0}" : @"-",
-+                                                        ruleset?.ShortName == @"osu"
-+                                                            ? @"Estimate based on 10000 random accounts grabbed."
-+                                                            : @"Only estimated for osu! standard."),
++                                                        ruleset != null && LocalPriorityPolicy.HasRankEstimate(ruleset.ShortName)
++                                                            ? @"Estimate based on top 10000 and 10000 random accounts grabbed."
++                                                            : @"Not estimated for this ruleset."),
 +                                                    bigValue(@"Local Ranking", localRank != null ? $@"#{localRank}" : @"-"),
 +                                                },
 +                                            },
@@ -11807,7 +12481,7 @@ index 0000000000..cfabcfaa0d
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileStatistics.cs b/osu.Game/LocalPriority/LocalProfileStatistics.cs
 new file mode 100644
-index 0000000000..f612766545
+index 0000000000..81e2dab972
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileStatistics.cs
 @@ -0,0 +1,861 @@
@@ -11841,7 +12515,7 @@ index 0000000000..f612766545
 +        public double PP { get; init; }
 +
 +        /// <summary>
-+        /// Estimated online global rank for this PP (osu! standard only), or null.
++        /// Estimated online global rank for this PP, or null.
 +        /// </summary>
 +        public int? EstimatedGlobalRank { get; init; }
 +        public double Accuracy { get; init; }
@@ -12393,7 +13067,7 @@ index 0000000000..f612766545
 +                WeeklyPlays = weekly,
 +                History = history,
 +                PP = totalPP,
-+                EstimatedGlobalRank = ruleset.ShortName == @"osu" && best.Length > 0 ? LocalPriorityPolicy.EstimateGlobalRank(totalPP) : null,
++                EstimatedGlobalRank = best.Length > 0 ? LocalPriorityPolicy.EstimateGlobalRank(ruleset.ShortName, totalPP) : null,
 +                Accuracy = accuracy,
 +                TotalAccuracy = options.ShowTotalAccuracy ? calculateTotalAccuracy(plays, ruleset) : null,
 +                Plays = plays,
@@ -15016,10 +15690,10 @@ index 0000000000..dde162cdd0
 +}
 diff --git a/osu.Game/LocalPriority/LocalSpeedrun.cs b/osu.Game/LocalPriority/LocalSpeedrun.cs
 new file mode 100644
-index 0000000000..e0bef5dbf8
+index 0000000000..393ca8d27b
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalSpeedrun.cs
-@@ -0,0 +1,559 @@
+@@ -0,0 +1,557 @@
 +using System;
 +using System.Diagnostics.CodeAnalysis;
 +using System.Globalization;
@@ -15062,7 +15736,7 @@ index 0000000000..e0bef5dbf8
 +        public double? TargetPP { get; set; }
 +
 +        /// <summary>
-+        /// Estimated global rank to reach (osu! standard only, like the estimate itself).
++        /// Estimated global rank to reach.
 +        /// </summary>
 +        public int? TargetRank { get; set; }
 +
@@ -15089,23 +15763,21 @@ index 0000000000..e0bef5dbf8
 +            if (TargetPP is double targetPP && Math.Round(pp) < targetPP)
 +                return false;
 +
-+            if (TargetRank is int targetRank && (Ruleset != @"osu" || pp <= 0 || LocalPriorityPolicy.EstimateGlobalRank(pp) > targetRank))
++            if (TargetRank is int targetRank && (pp <= 0 || !(LocalPriorityPolicy.EstimateGlobalRank(Ruleset, pp) <= targetRank)))
 +                return false;
 +
 +            return true;
 +        }
 +
 +        /// <summary>
-+        /// "#10,000 • 8,550pp": the goal, with the other half estimated in osu! (the rank for a PP goal, the PP for a rank goal).
++        /// "#10,000 • 8,550pp": the goal, with the other half estimated (the rank for a PP goal, the PP for a rank goal).
 +        /// </summary>
 +        public string DescribeGoal() => DescribeGoal(Ruleset, TargetPP, TargetRank);
 +
 +        public static string DescribeGoal(string ruleset, double? targetPP, int? targetRank)
 +        {
-+            bool osu = ruleset == @"osu";
-+
-+            int? rank = targetRank ?? (osu && targetPP is double p && p > 0 ? LocalPriorityPolicy.EstimateGlobalRank(p) : null);
-+            double? pp = targetPP ?? (osu && targetRank is int r ? LocalPriorityPolicy.EstimatePPForRank(r) : null);
++            int? rank = targetRank ?? (targetPP is double p && p > 0 ? LocalPriorityPolicy.EstimateGlobalRank(ruleset, p) : null);
++            double? pp = targetPP ?? (targetRank is int r ? LocalPriorityPolicy.EstimatePPForRank(ruleset, r) : null);
 +
 +            string ppText = pp is double ppValue ? $@"{ppValue:N0}pp" : string.Empty;
 +            string rankText = rank is int rankValue ? $@"#{rankValue:N0}" : string.Empty;
@@ -15150,7 +15822,7 @@ index 0000000000..e0bef5dbf8
 +        private OsuSpriteText estimate = null!;
 +        private OsuSpriteText error = null!;
 +
-+        private bool rankAvailable => ruleset.ShortName == @"osu";
++        private bool rankAvailable => LocalPriorityPolicy.HasRankEstimate(ruleset.ShortName);
 +
 +        public LocalSpeedrunGoalWindow(RulesetInfo ruleset, Action<LocalSpeedrun> start)
 +        {
@@ -15375,7 +16047,7 @@ index 0000000000..e0bef5dbf8
 +            if (text.Length == 0)
 +                problem = rankAvailable ? @"Type in PP, or a rank after a #." : @"Type in the PP to reach.";
 +            else if (isRank && !rankAvailable)
-+                problem = @"The rank is estimated in osu! only.";
++                problem = @"The rank isn't estimated for this ruleset.";
 +            else if (number.Length == 0 || !number.All(char.IsAsciiDigit))
 +                problem = isRank ? @"Type the rank as #10000." : @"PP must be a whole number.";
 +            else if (isRank)
@@ -15581,7 +16253,7 @@ index 0000000000..e0bef5dbf8
 +}
 diff --git a/osu.Game/LocalPriority/LocalUnfinishedPlays.cs b/osu.Game/LocalPriority/LocalUnfinishedPlays.cs
 new file mode 100644
-index 0000000000..f1eac30dae
+index 0000000000..37a860c0f1
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalUnfinishedPlays.cs
 @@ -0,0 +1,186 @@
@@ -16012,7 +16684,7 @@ index df2044d2ab..5ce8281cb7 100644
          protected abstract string Target { get; }
  
 diff --git a/osu.Game/Online/API/LocalUserState.cs b/osu.Game/Online/API/LocalUserState.cs
-index 3aecf82b01..63df2ad5ea 100644
+index 3aecf82b01..43c150f2a8 100644
 --- a/osu.Game/Online/API/LocalUserState.cs
 +++ b/osu.Game/Online/API/LocalUserState.cs
 @@ -72,6 +72,34 @@ public void SetPlaceholderLocalUser(string username)
@@ -16116,7 +16788,7 @@ index 2b47f159e6..ab8059f8e9 100644
              {
                  Logger.Log($@"Blocking resource lookup from external website: {url}", LoggingTarget.Network, LogLevel.Important);
 diff --git a/osu.Game/OsuGame.cs b/osu.Game/OsuGame.cs
-index 08b4b8a100..fe5d085931 100644
+index 08b4b8a100..10b87975ff 100644
 --- a/osu.Game/OsuGame.cs
 +++ b/osu.Game/OsuGame.cs
 @@ -47,6 +47,7 @@
@@ -16232,7 +16904,7 @@ index 08b4b8a100..fe5d085931 100644
              foreach (var overlay in singleDisplaySideOverlays)
              {
 diff --git a/osu.Game/OsuGameBase.cs b/osu.Game/OsuGameBase.cs
-index 6119640b2c..2ff5b37952 100644
+index 948a5cf4de..03b520e0d0 100644
 --- a/osu.Game/OsuGameBase.cs
 +++ b/osu.Game/OsuGameBase.cs
 @@ -47,6 +47,7 @@
@@ -16278,7 +16950,7 @@ index 6119640b2c..2ff5b37952 100644
              base.Content.Add(MultiplayerClient);
              base.Content.Add(metadataClient);
 diff --git a/osu.Game/Overlays/Mods/IncompatibilityDisplayingModPanel.cs b/osu.Game/Overlays/Mods/IncompatibilityDisplayingModPanel.cs
-index 84336319b7..1bb4c4f027 100644
+index 84336319b7..eff970e7db 100644
 --- a/osu.Game/Overlays/Mods/IncompatibilityDisplayingModPanel.cs
 +++ b/osu.Game/Overlays/Mods/IncompatibilityDisplayingModPanel.cs
 @@ -42,9 +42,47 @@ protected override void LoadComplete()
@@ -16333,7 +17005,7 @@ index 84336319b7..1bb4c4f027 100644
  
          protected override Colour4 BackgroundColour => incompatible.Value ? ColourProvider.Background6 : base.BackgroundColour;
 diff --git a/osu.Game/Overlays/Mods/ModCustomisationPanel.cs b/osu.Game/Overlays/Mods/ModCustomisationPanel.cs
-index e6d73fe092..763fb17dd7 100644
+index e6d73fe092..a4193b589b 100644
 --- a/osu.Game/Overlays/Mods/ModCustomisationPanel.cs
 +++ b/osu.Game/Overlays/Mods/ModCustomisationPanel.cs
 @@ -178,11 +178,38 @@ private void updateDisplay()
@@ -16387,7 +17059,7 @@ index e6d73fe092..763fb17dd7 100644
                      sectionsFlow.Add(new ModCustomisationSection(mod, settings));
              }
 diff --git a/osu.Game/Overlays/Mods/ModSelectFooterContent.cs b/osu.Game/Overlays/Mods/ModSelectFooterContent.cs
-index 10f8976c49..a36adb40b0 100644
+index 10f8976c49..4b8120cc59 100644
 --- a/osu.Game/Overlays/Mods/ModSelectFooterContent.cs
 +++ b/osu.Game/Overlays/Mods/ModSelectFooterContent.cs
 @@ -7,6 +7,7 @@
@@ -16409,7 +17081,7 @@ index 10f8976c49..a36adb40b0 100644
  
              beatmapAttributesDisplay?.Mods.Value = ActiveMods.Value;
 diff --git a/osu.Game/Overlays/Mods/ModSelectOverlay.cs b/osu.Game/Overlays/Mods/ModSelectOverlay.cs
-index df6000920f..8c866b9b4f 100644
+index df6000920f..766f5b9b08 100644
 --- a/osu.Game/Overlays/Mods/ModSelectOverlay.cs
 +++ b/osu.Game/Overlays/Mods/ModSelectOverlay.cs
 @@ -117,6 +117,12 @@ public string SearchTerm
@@ -16473,7 +17145,7 @@ index 9f5583cf73..0ecd9e819d 100644
      }
  }
 diff --git a/osu.Game/Overlays/Profile/Sections/Historical/ProfileLineChart.cs b/osu.Game/Overlays/Profile/Sections/Historical/ProfileLineChart.cs
-index 5711bfc046..8affaafc19 100644
+index 5711bfc046..f424e3f0e9 100644
 --- a/osu.Game/Overlays/Profile/Sections/Historical/ProfileLineChart.cs
 +++ b/osu.Game/Overlays/Profile/Sections/Historical/ProfileLineChart.cs
 @@ -37,6 +37,14 @@ public APIUserHistoryCount[] Values
@@ -16501,7 +17173,7 @@ index 5711bfc046..8affaafc19 100644
                  Rotation = 45,
                  X = x
 diff --git a/osu.Game/Overlays/Profile/Sections/Historical/UserHistoryGraph.cs b/osu.Game/Overlays/Profile/Sections/Historical/UserHistoryGraph.cs
-index 0259231001..af3218a0e0 100644
+index 0259231001..f216e41477 100644
 --- a/osu.Game/Overlays/Profile/Sections/Historical/UserHistoryGraph.cs
 +++ b/osu.Game/Overlays/Profile/Sections/Historical/UserHistoryGraph.cs
 @@ -14,6 +14,9 @@ public partial class UserHistoryGraph : UserGraph<DateTime, long>
@@ -16524,7 +17196,7 @@ index 0259231001..af3218a0e0 100644
      }
  }
 diff --git a/osu.Game/Overlays/Toolbar/ToolbarUserButton.cs b/osu.Game/Overlays/Toolbar/ToolbarUserButton.cs
-index d8350ce451..cbd6310dc0 100644
+index d8350ce451..1c74bc2434 100644
 --- a/osu.Game/Overlays/Toolbar/ToolbarUserButton.cs
 +++ b/osu.Game/Overlays/Toolbar/ToolbarUserButton.cs
 @@ -12,12 +12,15 @@
@@ -16733,7 +17405,7 @@ index e5df7a65dc..82b16c7fd2 100644
  
          private partial class Statistic<T> : CompositeDrawable
 diff --git a/osu.Game/Screens/Play/SubmittingPlayer.cs b/osu.Game/Screens/Play/SubmittingPlayer.cs
-index 1330620555..b108353473 100644
+index 1330620555..f5717290e1 100644
 --- a/osu.Game/Screens/Play/SubmittingPlayer.cs
 +++ b/osu.Game/Screens/Play/SubmittingPlayer.cs
 @@ -10,12 +10,14 @@
@@ -16915,7 +17587,7 @@ index 1330620555..b108353473 100644
          /// Construct a request to be used for retrieval of the score token.
          /// Can return null, at which point <see cref="ShouldExitOnTokenRetrievalFailure"/> will be fired.
 diff --git a/osu.Game/Screens/Ranking/Expanded/Statistics/PerformanceStatistic.cs b/osu.Game/Screens/Ranking/Expanded/Statistics/PerformanceStatistic.cs
-index 1c0ad8c88e..f3c119a6c6 100644
+index 1c0ad8c88e..c9285dc68e 100644
 --- a/osu.Game/Screens/Ranking/Expanded/Statistics/PerformanceStatistic.cs
 +++ b/osu.Game/Screens/Ranking/Expanded/Statistics/PerformanceStatistic.cs
 @@ -11,6 +11,7 @@
@@ -17002,7 +17674,7 @@ index 5011166bb1..c0ff63b8d7 100644
  
                          match &= anyTagMatched;
 diff --git a/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs b/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs
-index e1fe77f386..529083d0ac 100644
+index e1fe77f386..cd81e2bb5b 100644
 --- a/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs
 +++ b/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs
 @@ -18,6 +18,7 @@
@@ -17097,7 +17769,7 @@ index ff34c9ef38..4ae07eb97e 100644
  
                  return items.ToArray();
 diff --git a/osu.Game/Screens/Select/BeatmapMetadataWedge.cs b/osu.Game/Screens/Select/BeatmapMetadataWedge.cs
-index 4fa8deb941..ce124637a2 100644
+index 4fa8deb941..97fec80dbf 100644
 --- a/osu.Game/Screens/Select/BeatmapMetadataWedge.cs
 +++ b/osu.Game/Screens/Select/BeatmapMetadataWedge.cs
 @@ -175,6 +175,8 @@ private void load(AudioManager audio)
@@ -17110,7 +17782,7 @@ index 4fa8deb941..ce124637a2 100644
                                      },
                                  },
 diff --git a/osu.Game/Screens/Select/FooterButtonMods.cs b/osu.Game/Screens/Select/FooterButtonMods.cs
-index 95328ee848..4ab76ff95f 100644
+index 95328ee848..5ee1edc2ac 100644
 --- a/osu.Game/Screens/Select/FooterButtonMods.cs
 +++ b/osu.Game/Screens/Select/FooterButtonMods.cs
 @@ -15,6 +15,7 @@
@@ -17162,7 +17834,7 @@ index 99b6bc45e1..022ea5dbf8 100644
      }
  }
 diff --git a/osu.Game/Screens/Select/PanelBeatmapSet.cs b/osu.Game/Screens/Select/PanelBeatmapSet.cs
-index 87a85cf85d..47fa8fb1b0 100644
+index 87a85cf85d..5ce1f210d4 100644
 --- a/osu.Game/Screens/Select/PanelBeatmapSet.cs
 +++ b/osu.Game/Screens/Select/PanelBeatmapSet.cs
 @@ -66,6 +66,9 @@ public partial class PanelBeatmapSet : Panel
@@ -17187,7 +17859,7 @@ index 87a85cf85d..47fa8fb1b0 100644
                  return items.ToArray();
              }
 diff --git a/osu.Game/Screens/Select/RealmPopulatingOnlineLookupSource.cs b/osu.Game/Screens/Select/RealmPopulatingOnlineLookupSource.cs
-index 023e9f73c3..e74b803c6c 100644
+index 023e9f73c3..7f17596c44 100644
 --- a/osu.Game/Screens/Select/RealmPopulatingOnlineLookupSource.cs
 +++ b/osu.Game/Screens/Select/RealmPopulatingOnlineLookupSource.cs
 @@ -40,6 +40,11 @@ public partial class RealmPopulatingOnlineLookupSource : Component
@@ -17203,7 +17875,7 @@ index 023e9f73c3..e74b803c6c 100644
              var tcs = new TaskCompletionSource<APIBeatmapSet?>();
  
 diff --git a/osu.Game/Screens/Select/SoloSongSelect.cs b/osu.Game/Screens/Select/SoloSongSelect.cs
-index 623b78b8bf..f02cc54c83 100644
+index 623b78b8bf..77477a557d 100644
 --- a/osu.Game/Screens/Select/SoloSongSelect.cs
 +++ b/osu.Game/Screens/Select/SoloSongSelect.cs
 @@ -46,6 +46,9 @@ public partial class SoloSongSelect : SongSelect
@@ -17238,7 +17910,7 @@ index 623b78b8bf..f02cc54c83 100644
  
              // Ctrl+Enter should start map with autoplay enabled.
 diff --git a/osu.Game/Users/Drawables/DrawableAvatar.cs b/osu.Game/Users/Drawables/DrawableAvatar.cs
-index 137bff6af2..4acea52d01 100644
+index 137bff6af2..1c9e5e5766 100644
 --- a/osu.Game/Users/Drawables/DrawableAvatar.cs
 +++ b/osu.Game/Users/Drawables/DrawableAvatar.cs
 @@ -31,9 +31,21 @@ public DrawableAvatar(IUser user = null)

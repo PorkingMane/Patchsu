@@ -17,6 +17,7 @@ Numbering: **0001–0499** are Patchsu's own patches, **0500–0999** port mods 
 |---|---|---|---|
 | 0001 | Offline fix | – | **required**, every other patch builds on it |
 | 0002 | Local profiles | 0001 | big, slower build |
+| 0002b | P2P multiplayer | 0002 | very early test: LAN lobby by code, no gameplay yet |
 | 0003 | Interface adjustments | 0001 | |
 | 0003b | Search adjustments | 0001 | `scorewithmod=` (play mods) and `playdate=` (play date) search keywords |
 | 0004 | Pause PP penalty | 0002 | Taken from Torii client |
@@ -70,7 +71,7 @@ A fully local profile system with its own profile page, laid out like the websit
   (stats, PP graph, best / recent scores, play history, most played, editing in place).
 - Local profiles send nothing to osu! servers. With "online lookups" on, beatmap info / downloads, tags and leaderboards use the
   signed-in online account (scores are still never submitted).
-- Per-profile play count, play time, hits, PP and an estimated global rank. Total Play Time reads like the website's / lazer's
+- Per-profile play count, play time, hits, PP and an estimated global rank (all four rulesets). Total Play Time reads like the website's / lazer's
   ("5h 12m", "3d 4h 12m" from 24 hours on), with the total in hours (or minutes under 2 hours) on hover. Optional Relax / Autopilot PP, "Ignore 'Unranked' mod
   status", and "Count everything as ranked" (per profile or for all). PP / rank changes animate on the toolbar like lazer's.
 - Plays saved under a profile's name (online account, guest, older profile, osu!stable imports) can be synced to it.
@@ -84,13 +85,15 @@ A fully local profile system with its own profile page, laid out like the websit
   the last 10 seconds, #1 last. The countdown shows seconds only (30:00 / 60:00) and makes a sound only in its last 3 seconds.
 - Failed / quit plays in Recent Plays open their beatmap in song select on click (there are no results or replay to open).
 - Speedrun profiles ("⋮" → New 'Speedrun' profile, "SP Profile N", numbered and reset like SD/PF ones): set one goal in the
-  window that opens, a PP value (`1000`) or an estimated global rank (`#10000`, osu! only). In osu! the other half is estimated as you type and
-  shown with the goal, e.g. `#3 • 26,158pp` or `#1,314,315 • 400pp`. The timer on the page counts the time the profile was active (saved every minute and on switching or
+  window that opens, a PP value (`1000`) or an estimated global rank (`#10000`). The other half is estimated as you type and
+  shown with the goal, e.g. `#3 • 29,240pp` or `#1,425,098 • 400pp` (osu!). The timer on the page counts the time the profile was active (saved every minute and on switching or
   quitting), stops when a play (or a deleted score, or anything else that changes PP) reaches the goal, turns blue, and a
-  "DONE!" notification shows the final time. The goal counts the ruleset selected when the profile was made.
+  "DONE!" notification shows the final time. The goal counts the ruleset shown on the profile page when the run starts, and starting it switches the game (carousel) to that ruleset.
 - Failed / quit plays show in Recent Plays (rank F).
 - Replay import (`.osr` folder) into a profile, export of the top 50 or all replays for current profile, exclude a score / difficulty / set from PP, "Transfer score" between profiles (from the profile page or a leaderboard score's right-click, replay or not), "Rebuild play statistics from saved scores" if .json broke.
-- "Fetch top 200 plays of <profile> from osu!" (Settings → Patchsu → Patch 2): the best plays (current mode) of the osu! player with the profile's name are added to the profile, without replays. Beatmaps you don't have are downloaded after asking, under one notification that counts how many are downloaded and how many are left, and each play is added once its beatmap is in. Replays osu! has for those plays are then downloaded too and replace the plays without one. The notification can be swiped away while it runs; the fetch carries on in the notification list. Plays already there are skipped. Each fetched play counts as one play (its hits, and the map's length adjusted for rate-changing mods as play time), with or without its replay; plays fetched by older builds are counted too (marked once on startup). Needs "Online lookups on local profiles" turned on (while it's off the button is greyed out and takes you to that setting) and your online account signed in.
+- "Fetch top 200 plays of <profile> from osu!" (Settings → Patchsu → Patch 2): the best plays (current mode) of the osu! player with the profile's name are added to the profile. Beatmaps you don't have are downloaded after asking, under one notification that counts how many are downloaded and how many are left, and each play is added once its beatmap is in. Replays osu! has for those plays are then downloaded too and replace the plays without one. The notification can be swiped away while it runs; the fetch carries on in the notification list. Plays already there are skipped. Fetched plays are saved without osu!'s PP (`PP = null`), so leaderboards / 0003's PP sort calculate it like any local score; plays fetched by older builds lose it once on load (`clearBanchoScoresPP`, migration 3). Each fetched play counts as one play (its hits, and the map's length adjusted for rate-changing mods as play time), with or without its replay; plays fetched by older builds are counted too (marked once on startup). Where the plays come from (`LocalProfileManager.pickBanchoSource`, `LocalPriority/BanchoPlaySources.cs`): if the profile's name is the signed-in online account (case-insensitive, space = underscore), the player, plays and replays go through that account, which needs "Online lookups on local profiles" on while a local profile is active. Any other name needs the user's **own osu! API key** ("osu! API key for other players' plays" group: client ID + client secret of their OAuth application, client-credentials grant, `public` scope, saved as `ApiClientId` / `ApiClientSecret` in the `LocalProfiles` section); the signed-in account is never used to ask for someone else's plays, and without a key the fetch says so and sends nothing. Beatmaps are only ever downloaded with the signed-in account; with only a key, those plays are skipped ("sign in to download their beatmaps"). The button is greyed out (and takes you to online lookups) only while online lookups are off and no key is set.
+  Once the player is found (one lookup), a dialog (`BanchoConfirmDialog`) asks before anything else is sent; "No" or dismissing it ends the fetch. After a confirmed fetch ends (beatmap and replay downloads included, also when cancelled or failed), the next fetch waits 10 minutes (`BANCHO_FETCH_COOLDOWN_MINUTES`, for every profile; the end time is `TopPlaysFetchEndedAt` in the `LocalProfiles` section, so restarts keep it; never more than 10 minutes if the clock goes back). During the wait the button looks unclickable (`LocalProfileManager.BanchoFetchCoolingDown`, turns off by itself when the wait ends) but still works: clicking it sends nothing and posts a notification with the time left ("Try again in 7 minutes 5 seconds").
+- Rate limit (`LocalPriority/BanchoRequestLimiter.cs`): every request Patchsu itself sends to osu! (player lookup, score pages, beatmap and replay downloads, API key tokens, through the account or the key) starts at least 1 s after the previous one, one limiter for the whole process (osu!'s API terms: max 60 requests/minute). Lazer's own requests aren't limited. A downloaded replay's import makes one cached `GetUserRequest` of its own (`ScoreImporter`), once per player.
 - Setting defaults (Settings → Patchsu → Patch 2): "Count LOCAL maps towards PP" off, "Gray out scores that do not go towards PP…" on,
   "Create profiles with mod rules" on. Saved options keep their values; only setups without saved options get these.
 - `PatchSettingsSubsection`: the base class other patches use for their "Patch N." settings subsection.
@@ -98,6 +101,25 @@ A fully local profile system with its own profile page, laid out like the websit
 
 Data: `<osu data>/patchsu-osu/` (profiles, caches, tags; was `osu-local/`). Its settings are the `LocalProfiles` section of
 `PatchsuSettings.json` (0001), no longer inside `profiles.json` (taken over once and removed from it). Nothing in the official osu! database schema changes.
+
+## 0002b · P2P multiplayer
+
+File `0002b-P2P-Multiplayer.patch`. Very early test of local P2P multiplayer: only connecting, LAN (or VPN) only, no gameplay yet.
+
+- Main menu → Play → "multi" (0001 removed lazer's multiplayer buttons) opens `P2PScreen` ("Multiplayer · P2P").
+- Entering it opens a lobby on this machine: `P2PLobby.Host` listens on TCP **13381**. "Create Code" shows the code and copies it;
+  "Connect via Code" leaves your own lobby and joins (back to hosting if it fails or the host goes away).
+- Code: 8 Crockford base32 symbols `XXXX-XXXX` = the host's LAN IPv4 (adapter with a default gateway, private ranges first) + a checksum
+  symbol. Case, dashes and spaces are ignored; O→0, I/L→1.
+- Protocol: 4 byte length (max 4 MB) + JSON. Guest → host `hello` (version 1, its `P2PPeer`); host → each guest `peers` (everyone else,
+  host first) whenever someone joins or leaves. Peer ids come from the host (host 0).
+- `P2PPeer`: username, user ID and, for local profiles, the profile picture file (≤ 512 KB, decoded only up to 1024 px).
+  Others' local profile IDs are not looked up locally (they'd clash): no picture → online avatar for IDs > 1, else the guest one.
+- Layout follows the maintainer's sketch: panels left, your avatar (`MatchmakingAvatar`, yellow ring) in the middle with
+  `P2PFloatingAvatar`s around it (motion and appear sounds from ranked play's `QueueVisualisation.MovingAvatar`), help text right.
+- Planned next (agreed in conversation): UPnP + IPv6 for internet play, host-run room logic from `TestMultiplayerClient`,
+  spectator relay for the live leaderboard, local scores/results, beatmap download by online ID when logged in.
+- Tests: `work/p2b-tests/P2PLobbyTest.cs` (codes, join/leave over loopback).
 
 ## 0003 · Interface adjustments
 
@@ -114,6 +136,9 @@ Small song select / toolbar tweaks that stay true to lazer's UI:
 - Middle-click "Now playing" on the toolbar mutes the music.
 - "Play" and "Clear all local scores" removed from the footer Options (F3) menu.
 - Shift + arrow keys move the caret by one character while the search box has text.
+- Skip button in breaks (solo plays and replays only): skips to 3 seconds before the break ends, shown when at least 1 s can be
+  skipped. Settings → Patchsu → "Patch 3. Interface Improvements" → "Allow skipping breaks longer than 3 seconds" (on by
+  default, `PatchsuSettings` "Interface"/"SkipBreaks"). Files: `LocalPriority/LocalInterfaceSettings.cs`, `Screens/Play/Player.cs`.
 
 ## 0003b · Search adjustments
 
@@ -180,6 +205,11 @@ Filters by how long ago the play was set, counted back from now:
 Optional PP reduction for pausing: ×0.93 per pause (from Torii's pause penalty), on every map. Settings → Patchsu →
 "Patch 4. Pause PP penalty". Shown on the results screen (with Torii's animation), leaderboard tooltips and the profile.
 Toggling it animates the toolbar PP / rank. Also yoinkes a **pause counter** skin component, listed in its own skin editor section. Needs 0002
+
+Pauses before the first hit object, inside a break (`BreakPeriod.HasEffect` + `Contains`, same as `BreakTracker`) or after the last hit object are free:
+`LocalPausePenalty.CountPenalisedPauses` checks `ScoreInfo.Pauses` timestamps against the beatmap (`GetBeatmap`, set by `LocalProfileManager`;
+cached per score ID + beatmap hash + pause count). Vanilla `ScoreInfo.Pauses` is never changed (it is submitted/spectated). The pause
+counter shows only pauses that cost PP. Without the beatmap every pause counts.
 
 ## 0005 · Replay toggles
 
@@ -253,16 +283,18 @@ acronyms kept as in Ritsu.
 | System | Phrase Mirror (PMR), Echo (ECH), Swing (SWG) |
 
 Patchsu additions: No Sliding length threshold, and scores saved with an unresolved mod (`XX??`)
-resolve to the real mod. Not ported: Directional Flicks, RandomV2 / Spacing Adjust replay panels.
+resolve to the real mod. Own mod icons for Decoy Circles, Miss Challenge, No Sliding and RandomV2 (`ritsu-*.png`). Not ported: Directional Flicks, RandomV2 / Spacing Adjust replay panels.
 The Modosu-derived files are **GPL-3.0** (`LICENCE-Modosu.txt` is added by the patch).
 
 ## 0501 · Torii mods
 
-Mods from Torii (by ShikkesoraSIM): **Hit Sounder** (HS, osu!) and **Pitch Adjust** (PA, all rulesets).
+Mods from Torii (by ShikkesoraSIM): **Hit Sounder** (HS, osu!) and **Pitch Adjust** (PA, all rulesets). Both have their own
+mod icons (`torii-*.png`, embedded in osu.Game).
 
 ## 0502 · McOsu mods
 
-Two mods from McOsu, osu! ruleset only. Mod select shows a green "from McOsu" plaque on both.
+Two mods from McOsu, osu! ruleset only. Mod select shows a green "from McOsu" plaque on both. Both have their own mod icons
+(`mcosu-*.png`, embedded in osu.Game the same way as 0500/0501, so 0502 still needs only 0001).
 
 - **Mafham** (MH, Fun), "Maybe infinity IS finite after all?": approach rate is set to negative infinity. Every object except spinners is on screen
   at once, without approach circles, follow points or the "not hittable yet" dim. Gameplay doesn't change: hit windows,

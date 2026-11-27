@@ -5,6 +5,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Extensions;
@@ -35,8 +37,11 @@ namespace osu.Game.Tests.Visual.Navigation
         private int scoreRequests;
         private int downloads;
         private int replayDownloads;
+        private readonly List<long> requestTimes = new List<long>();
         private bool holdScores;
         private GetUserScoresRequest? heldScores;
+        private bool holdUser;
+        private GetUserRequest? heldUser;
         private readonly HashSet<string> seenNotifications = new HashSet<string>();
 
         /// <summary>
@@ -85,6 +90,7 @@ namespace osu.Game.Tests.Visual.Navigation
             TotalScore = totalScore,
             Accuracy = 0.98,
             MaxCombo = 321,
+            PP = 500,
             Rank = ScoreRank.A,
             EndedAt = date,
             Mods = new[] { new APIMod { Acronym = "HD" }, new APIMod { Acronym = "CL" } },
@@ -113,6 +119,14 @@ namespace osu.Game.Tests.Visual.Navigation
                 profile = manager.CreateDefaultProfile();
                 manager.Switch(profile.Id);
                 ((DummyAPIAccess)API).LocalUser.Value = profile.ToUser();
+
+                // The signed-in account is the player named like the profile (their own plays go through it).
+                LocalPriorityPolicy.OnlineAccountUser = new APIUser { Id = 1234, Username = profile.Name };
+                manager.BanchoApiClientId.Value = string.Empty;
+                manager.BanchoApiClientSecret.Value = string.Empty;
+                manager.ApiKeySourceOverride = null;
+                apiKeySource = null;
+                manager.ResetBanchoFetchCooldown();
             });
 
             AddStep("import a generated beatmap (owned)", () =>
@@ -133,15 +147,35 @@ namespace osu.Game.Tests.Visual.Navigation
             AddStep("answer osu! requests", () =>
             {
                 scoreRequests = 0;
+                userLookups = 0;
+                holdScores = holdUser = false;
+                heldScores = null;
+                heldUser = null;
                 downloads = 0;
                 replayDownloads = 0;
                 var date = new DateTimeOffset(2024, 5, 6, 7, 8, 9, TimeSpan.Zero);
 
+                lock (requestTimes)
+                    requestTimes.Clear();
+
                 ((DummyAPIAccess)API).HandleRequest = request =>
                 {
+                    if (request is GetUserRequest or GetUserScoresRequest or DownloadReplayRequest or DownloadBeatmapSetRequest)
+                    {
+                        lock (requestTimes)
+                            requestTimes.Add(Environment.TickCount64);
+                    }
+
                     switch (request)
                     {
                         case GetUserRequest user:
+                            if (holdUser)
+                            {
+                                heldUser = user;
+                                return true;
+                            }
+
+                            Interlocked.Increment(ref userLookups);
                             user.TriggerSuccess(new APIUser { Id = 1234, Username = profile.Name });
                             return true;
 
@@ -183,7 +217,8 @@ namespace osu.Game.Tests.Visual.Navigation
         public void TestFetchDownloadAndNoDuplicates()
         {
             AddStep("fetch", () => manager.FetchBanchoTopPlays(profile.Id));
-            AddUntilStep("download asked", () => dialog() != null);
+            confirmFetch();
+            AddUntilStep("download asked", () => dialog()?.GetType().Name == "BanchoDownloadDialog");
             AddAssert("owned play already added", profileScores, () => Is.EqualTo(1));
             AddStep("clear seen notifications", () => seenNotifications.Clear());
             AddStep("yes, download", () => dialog()!.ChildrenOfType<PopupDialogOkButton>().Single().TriggerClick());
@@ -206,6 +241,8 @@ namespace osu.Game.Tests.Visual.Navigation
             }));
             AddAssert("plays link to their beatmaps", () => Game.Realm.Run(r =>
                 r.All<ScoreInfo>().AsEnumerable().Where(x => x.UserID == profile.UserId && !x.DeletePending).All(x => x.BeatmapHash == x.BeatmapInfo!.Hash && x.BeatmapHash.Length > 0)));
+            AddAssert("osu!'s PP isn't kept (calculated here)", () => Game.Realm.Run(r =>
+                r.All<ScoreInfo>().AsEnumerable().Where(x => x.UserID == profile.UserId && !x.DeletePending).All(x => x.PP == null)));
             AddStep("count unranked test maps", () => manager.CountEverythingAsRanked.Value = true);
             AddAssert("downloaded play gives PP on the profile", () => LocalProfileStatistics.CalculatePerformanceAsync(manager.Store.ActiveProfile!,
                 new OsuRuleset().RulesetInfo, Game.Realm, Game.BeatmapManager, manager.Store, System.Threading.CancellationToken.None).GetResultSafely(), () => Is.GreaterThan(0));
@@ -236,7 +273,9 @@ namespace osu.Game.Tests.Visual.Navigation
             AddUntilStep("first fetch finished", () => !Game.ChildrenOfType<NotificationOverlay>().Single().ChildrenOfType<osu.Game.Overlays.Notifications.ProgressNotification>()
                                                             .Any(n => n.State == osu.Game.Overlays.Notifications.ProgressNotificationState.Active));
 
+            AddStep("wait is over", () => manager.ResetBanchoFetchCooldown());
             AddStep("fetch again", () => manager.FetchBanchoTopPlays(profile.Id));
+            confirmFetch();
             AddUntilStep("second page asked", () => scoreRequests, () => Is.EqualTo(2));
             AddWaitStep("let it finish", 10);
             AddAssert("no download asked", () => dialog(), () => Is.Null);
@@ -247,6 +286,218 @@ namespace osu.Game.Tests.Visual.Navigation
 
         private LocalProfileStatistics fullStatistics() => LocalProfileStatistics.CalculateAsync(manager.Store.GetProfile(profile.Id)!, new OsuRuleset().RulesetInfo,
             Game.Realm, Game.BeatmapManager, manager.Store, System.Threading.CancellationToken.None).GetResultSafely();
+
+        private void confirmFetch()
+        {
+            AddUntilStep("fetch confirmation asked", () => dialog()?.GetType().Name == "BanchoConfirmDialog");
+            AddStep("yes, fetch", () => dialog()!.ChildrenOfType<PopupDialogOkButton>().Single().TriggerClick());
+        }
+
+        private int userLookups;
+
+        [Test]
+        public void TestDeclineSendsNothingElse()
+        {
+            AddStep("fetch", () => manager.FetchBanchoTopPlays(profile.Id));
+            AddUntilStep("fetch confirmation asked", () => dialog()?.GetType().Name == "BanchoConfirmDialog");
+            AddAssert("player looked up", () => userLookups, () => Is.EqualTo(1));
+            AddStep("no", () => dialog()!.ChildrenOfType<PopupDialogCancelButton>().Single().TriggerClick());
+            AddWaitStep("wait", 10);
+            AddAssert("no plays asked for", () => scoreRequests, () => Is.EqualTo(0));
+            AddAssert("no plays", profileScores, () => Is.EqualTo(0));
+            AddAssert("no wait started", () => manager.BanchoFetchCooldownLeft, () => Is.EqualTo(TimeSpan.Zero));
+
+            AddStep("fetch again", () => manager.FetchBanchoTopPlays(profile.Id));
+            AddUntilStep("asked again", () => dialog()?.GetType().Name == "BanchoConfirmDialog");
+            AddStep("dismiss (escape)", () => dialog()!.Hide());
+            AddWaitStep("wait", 10);
+            AddAssert("dismissing says no", () => scoreRequests, () => Is.EqualTo(0));
+        }
+
+        [Test]
+        public void TestWaitStartsWhenDownloadsFinish()
+        {
+            AddStep("fetch", () => manager.FetchBanchoTopPlays(profile.Id));
+            confirmFetch();
+            AddUntilStep("download asked", () => dialog()?.GetType().Name == "BanchoDownloadDialog");
+            AddAssert("no wait while it runs", () => manager.BanchoFetchCooldownLeft, () => Is.EqualTo(TimeSpan.Zero));
+            AddStep("yes, download", () => dialog()!.ChildrenOfType<PopupDialogOkButton>().Single().TriggerClick());
+            AddUntilStep("replay downloaded", () => replayDownloads, () => Is.EqualTo(1));
+            AddUntilStep("wait started when it finished", () => manager.BanchoFetchCooldownLeft.TotalMinutes, () => Is.GreaterThan(9.9));
+            AddAssert("kept in PatchsuSettings.json", () => PatchsuSettings.Current.GetBindable("LocalProfiles", "TopPlaysFetchEndedAt", string.Empty).Value, () => Is.Not.Empty);
+
+            AddStep("count requests from here", () => userLookups = 0);
+            AddStep("fetch again", () => manager.FetchBanchoTopPlays(profile.Id));
+            AddUntilStep("says when it can fetch again", () => Game.ChildrenOfType<osu.Game.Overlays.Notifications.SimpleNotification>()
+                                                                   .Any(n => n.Text.ToString().Contains("once every 10 minutes")
+                                                                                     && System.Text.RegularExpressions.Regex.IsMatch(n.Text.ToString(), @"Try again in (10 minutes|9 minutes \d+ seconds?)\.")));
+            AddWaitStep("wait", 5);
+            AddAssert("nothing sent", () => userLookups, () => Is.EqualTo(0));
+            AddAssert("no confirmation", () => dialog(), () => Is.Null);
+
+            AddStep("wait is over", () => manager.ResetBanchoFetchCooldown());
+            AddStep("fetch again", () => manager.FetchBanchoTopPlays(profile.Id));
+            AddUntilStep("asked again", () => dialog()?.GetType().Name == "BanchoConfirmDialog");
+        }
+
+        [Test]
+        public void TestButtonGreyedOutWhileWaiting()
+        {
+            AddStep("online lookups on", () => manager.LocalProfilesUseOnlineAccount.Value = true);
+            AddStep("fetch", () => manager.FetchBanchoTopPlays(profile.Id));
+            confirmFetch();
+            AddUntilStep("download asked", () => dialog()?.GetType().Name == "BanchoDownloadDialog");
+            AddStep("no, skip", () => dialog()!.ChildrenOfType<PopupDialogCancelButton>().Single().TriggerClick());
+            AddUntilStep("waiting", () => manager.BanchoFetchCoolingDown.Value);
+
+            AddStep("open settings", () => settings.Show());
+            AddUntilStep("button shown", () => fetchButton()?.IsPresent == true);
+            AddUntilStep("greyed out", () => fetchButton()!.Colour.TopLeft.Linear.R, () => Is.LessThan(0.6f));
+            AddAssert("still clickable", () => fetchButton()!.Enabled.Value);
+            AddStep("count requests from here", () => userLookups = 0);
+            AddStep("click", () => fetchButton()!.TriggerClick());
+            AddUntilStep("says the time left", () => Game.ChildrenOfType<osu.Game.Overlays.Notifications.SimpleNotification>()
+                                                          .Any(n => n.Text.ToString().Contains("Try again in")));
+            AddWaitStep("wait", 5);
+            AddAssert("nothing sent", () => userLookups, () => Is.EqualTo(0));
+
+            AddStep("wait is over", () => manager.ResetBanchoFetchCooldown());
+            AddUntilStep("not waiting", () => !manager.BanchoFetchCoolingDown.Value);
+            // Settings items off screen don't animate, so look at the button before checking its colour.
+            AddStep("show the button", () =>
+            {
+                settings.Show();
+                settings.SectionsContainer.ScrollTo(fetchButton()!);
+            });
+            AddUntilStep("not greyed out", () => fetchButton()!.Colour.TopLeft.Linear.R, () => Is.EqualTo(1f).Within(0.01f));
+        }
+
+        [TearDown]
+        public void ForgetAccount() => LocalPriorityPolicy.OnlineAccountUser = null;
+
+        private FakeApiKeySource? apiKeySource;
+
+        /// <summary>
+        /// Stands in for the osu! API reached with the user's own API key.
+        /// </summary>
+        private class FakeApiKeySource : IBanchoPlaySource
+        {
+            public int Users, Pages, Replays;
+            public Func<List<SoloScoreInfo>> Plays = null!;
+            public Func<string> Replay = null!;
+
+            public Task<APIUser?> GetUser(string name, osu.Game.Rulesets.RulesetInfo ruleset, CancellationToken token)
+            {
+                Interlocked.Increment(ref Users);
+                return Task.FromResult<APIUser?>(new APIUser { Id = 5678, Username = name });
+            }
+
+            public Task<List<SoloScoreInfo>?> GetBestPlays(int userId, osu.Game.Rulesets.RulesetInfo ruleset, int offset, int limit, CancellationToken token)
+            {
+                Interlocked.Increment(ref Pages);
+                return Task.FromResult<List<SoloScoreInfo>?>(Plays());
+            }
+
+            public Task<string?> DownloadReplay(SoloScoreInfo play, CancellationToken token)
+            {
+                Interlocked.Increment(ref Replays);
+                return Task.FromResult<string?>(Replay());
+            }
+        }
+
+        private void useApiKey()
+        {
+            AddStep("signed in as someone else, API key set", () =>
+            {
+                LocalPriorityPolicy.OnlineAccountUser = new APIUser { Id = 999, Username = "someone else" };
+                var date = new DateTimeOffset(2024, 5, 6, 7, 8, 9, TimeSpan.Zero);
+                manager.ApiKeySourceOverride = apiKeySource = new FakeApiKeySource
+                {
+                    Plays = () => new List<SoloScoreInfo>
+                    {
+                        play(owned.MD5Hash, owned.OnlineID, owned.BeatmapSet!.OnlineID, 500_000, date),
+                        play(downloaded.Hash, downloaded.OnlineID, downloaded.SetID, 400_000, date.AddDays(1), hasReplay: true),
+                    },
+                    Replay = () => createReplay(date.AddDays(1)),
+                };
+                manager.BanchoApiClientId.Value = "12345";
+                manager.BanchoApiClientSecret.Value = "secret";
+            });
+        }
+
+        [Test]
+        public void TestOtherPlayerNeedsApiKey()
+        {
+            AddStep("signed in as someone else", () => LocalPriorityPolicy.OnlineAccountUser = new APIUser { Id = 999, Username = "someone else" });
+            AddStep("fetch", () => manager.FetchBanchoTopPlays(profile.Id));
+            AddUntilStep("says an API key is needed", () => Game.ChildrenOfType<osu.Game.Overlays.Notifications.SimpleNotification>()
+                                                                .Any(n => n.Text.ToString().Contains("isn't your signed-in osu! account")));
+            AddWaitStep("wait", 5);
+            AddAssert("account asked nothing", () => scoreRequests, () => Is.EqualTo(0));
+            AddAssert("no plays", profileScores, () => Is.EqualTo(0));
+        }
+
+        [Test]
+        public void TestOtherPlayerUsesApiKey()
+        {
+            useApiKey();
+            AddStep("fetch", () => manager.FetchBanchoTopPlays(profile.Id));
+            confirmFetch();
+            AddUntilStep("download asked", () => dialog()?.GetType().Name == "BanchoDownloadDialog");
+            AddStep("yes, download", () => dialog()!.ChildrenOfType<PopupDialogOkButton>().Single().TriggerClick());
+            AddUntilStep("both plays added", profileScores, () => Is.EqualTo(2));
+            AddUntilStep("replay through the API key", () => apiKeySource!.Replays, () => Is.EqualTo(1));
+            AddAssert("player and plays through the API key", () => (apiKeySource!.Users, apiKeySource.Pages), () => Is.EqualTo((1, 1)));
+            AddAssert("account asked for no plays or replays", () => (scoreRequests, replayDownloads), () => Is.EqualTo((0, 0)));
+            AddAssert("beatmap through the account", () => downloads, () => Is.EqualTo(1));
+            AddUntilStep("downloaded play has its replay", () => Game.Realm.Run(r =>
+                r.All<ScoreInfo>().AsEnumerable().Single(x => x.UserID == profile.UserId && !x.DeletePending && x.BeatmapInfo!.MD5Hash == downloaded.Hash).Files.Count > 0));
+        }
+
+        [Test]
+        public void TestApiKeyWithoutSignInSkipsBeatmaps()
+        {
+            useApiKey();
+            AddStep("go offline", () => ((DummyAPIAccess)API).SetState(APIState.Offline));
+            AddStep("fetch", () => manager.FetchBanchoTopPlays(profile.Id));
+            confirmFetch();
+            AddUntilStep("says beatmaps need signing in", () => Game.ChildrenOfType<osu.Game.Overlays.Notifications.ProgressNotification>()
+                                                                   .Any(n => n.CompletionText.ToString().Contains("1 skipped (sign in to download their beatmaps)")));
+            AddAssert("no download asked", () => dialog(), () => Is.Null);
+            AddAssert("owned play added", profileScores, () => Is.EqualTo(1));
+            AddAssert("nothing downloaded", () => downloads, () => Is.EqualTo(0));
+            AddStep("back online", () => ((DummyAPIAccess)API).SetState(APIState.Online));
+        }
+
+        [Test]
+        public void TestRequestsAreRateLimited()
+        {
+            AddStep("fetch", () =>
+            {
+                lock (requestTimes)
+                    requestTimes.Clear();
+
+                manager.FetchBanchoTopPlays(profile.Id);
+            });
+            confirmFetch();
+            AddUntilStep("download asked", () => dialog()?.GetType().Name == "BanchoDownloadDialog");
+            AddStep("yes, download", () => dialog()!.ChildrenOfType<PopupDialogOkButton>().Single().TriggerClick());
+            AddUntilStep("replay downloaded", () => replayDownloads, () => Is.EqualTo(1));
+            // The replay's import then looks its player up once (ScoreImporter, cached per player): that one isn't the fetch's request.
+            AddAssert("lookup, page, beatmap and replay asked for", () =>
+            {
+                lock (requestTimes)
+                    return requestTimes.Count;
+            }, () => Is.GreaterThanOrEqualTo(4));
+            AddAssert("at most one request a second (osu! API terms)", () =>
+            {
+                lock (requestTimes)
+                {
+                    var fetch = requestTimes.Take(4).ToList();
+                    return fetch.Zip(fetch.Skip(1), (a, b) => b - a).Min();
+                }
+            }, () => Is.GreaterThanOrEqualTo(950));
+        }
 
         [Test]
         public void TestOlderFetchedPlaysCountedOnce()
@@ -287,7 +538,7 @@ namespace osu.Game.Tests.Visual.Navigation
             osu.Game.Overlays.Notifications.ProgressNotification fetchNotification() =>
                 Game.ChildrenOfType<osu.Game.Overlays.Notifications.ProgressNotification>().Single(n => n.GetType().Name == "BanchoFetchNotification");
 
-            AddStep("hold osu!'s answer", () => holdScores = true);
+            AddStep("hold osu!'s answer", () => holdUser = true);
             AddStep("fetch", () => manager.FetchBanchoTopPlays(profile.Id));
             AddUntilStep("notification in the toast tray", () => Game.ChildrenOfType<osu.Game.Overlays.Notifications.ProgressNotification>()
                                                                      .Any(n => n.GetType().Name == "BanchoFetchNotification" && n.IsInToastTray));
@@ -298,12 +549,13 @@ namespace osu.Game.Tests.Visual.Navigation
             AddUntilStep("moved out of the toast tray", () => !fetchNotification().IsInToastTray);
             AddStep("let osu! answer", () =>
             {
-                holdScores = false;
-                var held = heldScores!;
-                heldScores = null;
+                holdUser = false;
+                var held = heldUser!;
+                heldUser = null;
                 ((DummyAPIAccess)API).HandleRequest!(held);
             });
-            AddUntilStep("download asked", () => dialog() != null);
+            confirmFetch();
+            AddUntilStep("download asked", () => dialog()?.GetType().Name == "BanchoDownloadDialog");
             AddStep("yes, download", () => dialog()!.ChildrenOfType<PopupDialogOkButton>().Single().TriggerClick());
             AddUntilStep("both plays added", profileScores, () => Is.EqualTo(2));
         }
@@ -312,15 +564,18 @@ namespace osu.Game.Tests.Visual.Navigation
         public void TestSkipDownload()
         {
             AddStep("fetch", () => manager.FetchBanchoTopPlays(profile.Id));
-            AddUntilStep("download asked", () => dialog() != null);
+            confirmFetch();
+            AddUntilStep("download asked", () => dialog()?.GetType().Name == "BanchoDownloadDialog");
             AddStep("no, skip", () => dialog()!.ChildrenOfType<PopupDialogCancelButton>().Single().TriggerClick());
             AddWaitStep("wait", 10);
             AddAssert("only the owned play", profileScores, () => Is.EqualTo(1));
             AddAssert("nothing downloaded", () => downloads, () => Is.EqualTo(0));
 
             // A second fetch works after the first one ended by skipping.
+            AddStep("wait is over", () => manager.ResetBanchoFetchCooldown());
             AddStep("fetch again", () => manager.FetchBanchoTopPlays(profile.Id));
-            AddUntilStep("download asked again", () => dialog() != null);
+            confirmFetch();
+            AddUntilStep("download asked again", () => dialog()?.GetType().Name == "BanchoDownloadDialog");
         }
 
         private SettingsOverlay settings => Game.Settings;
@@ -350,7 +605,36 @@ namespace osu.Game.Tests.Visual.Navigation
             AddStep("online lookups on", () => manager.LocalProfilesUseOnlineAccount.Value = true);
             AddUntilStep("not greyed out", () => fetchButton()!.Colour.TopLeft.Linear.R, () => Is.EqualTo(1f).Within(0.01f));
             AddStep("click", () => fetchButton()!.TriggerClick());
+            confirmFetch();
             AddUntilStep("fetched", () => scoreRequests, () => Is.EqualTo(1));
+        }
+
+        [Test]
+        public void TestOlderFetchedPlaysLoseBanchoPP()
+        {
+            Guid fetched = Guid.Empty;
+
+            AddStep("add a play fetched by an older build (osu!'s PP, no replay)", () => Game.Realm.Write(r =>
+            {
+                var beatmap = r.Find<BeatmapInfo>(owned.ID)!;
+                var score = new ScoreInfo(beatmap, r.Find<osu.Game.Rulesets.RulesetInfo>("osu")!, new osu.Game.Models.RealmUser { OnlineID = profile.UserId, Username = profile.Name })
+                {
+                    TotalScore = 1,
+                    OnlineID = -1,
+                    PP = 500,
+                    BeatmapHash = beatmap.Hash,
+                };
+                fetched = score.ID;
+                r.Add(score);
+            }));
+            AddStep("forget the migration, run it (runs on load)", () =>
+            {
+                var store = manager.Store;
+                var data = typeof(LocalProfileStore).GetField("data", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
+                data.GetType().GetProperty("Version")!.SetValue(data, 2);
+                typeof(LocalProfileManager).GetMethod("clearBanchoScoresPP", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(manager, null);
+            });
+            AddAssert("PP cleared", () => Game.Realm.Run(r => r.Find<ScoreInfo>(fetched)!.PP), () => Is.Null);
         }
 
         [Test]

@@ -17,7 +17,7 @@ This is a massive one. Literally, it has 16k lines of code in it at the time of 
     - Sudden Death / Perfect mod dependent profiles that will 'self-destruct' if you miss / get anything lower than 100
     - Speedrun profile with in-game timer that tracks whenever this profile is active, showing PP / Rank you need to reach
     - Local maps / Unranked maps / Unranked mod combinations / Relax and Autopilot can all count towards PP with each being separate setting
-    - Your actual Bancho profile top play downloading and import to local profile (with auto map and replay downloads, if Bancho has them)
+    - Your actual Bancho profile top play downloading and import to local profile (with auto map and replay downloads, if Bancho has them)^^
     - Export your top 50 / All replays from local profile into folder
     - Import all replays from folder to your local profile (imports directly into lazer database)
     - Remove scores that can't be calculated (also from database)
@@ -25,6 +25,8 @@ This is a massive one. Literally, it has 16k lines of code in it at the time of 
     - Mod rules allows you to Block certain mods; Only allow selected mods; Allow selected mods with exact setting; Auto switch to profile whenever rule mod preset is activated
 
 ^ - if you have scores under same name in database (locally) as your local profile, game will suggest you to sync every single one of them to your profile. Changing your name/pfp/flag will reflect on local leaderboards as well if you sync them. Deleting your profile WITH scores that were synced WOULD NOT delete scores from database. They are kept as a separate connection and Patchsu gives them back to the player ID they belonged to before
+
+^^ - Require API key for users other than the one you login with. You can fetch ONCE per 10 minutes with a rate limit of 1 request per second, complying with osu!API rules.
 
 This is a massive .patch file on top of basic osu!lazer profile and database system that allow you to do basically whatever you want locally, count anything you want towards PP as well as create some challanges for yourself... *ahem* youtubers *ahem*...
 I know the implementation itself might look a bit dry, but this is the best I could think of reusing same assets osu! already provides to not create something new, or something that looks vibecoded.

@@ -1,14 +1,18 @@
 diff --git a/osu.Game/LocalPriority/LocalPausePenalty.cs b/osu.Game/LocalPriority/LocalPausePenalty.cs
 new file mode 100644
-index 0000000000..47091a733b
+index 0000000000..8743316b66
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalPausePenalty.cs
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,145 @@
 +// Added by Patchsu
 +
 +using System;
++using System.Collections.Concurrent;
++using System.Collections.Generic;
 +using System.Threading;
++using osu.Game.Beatmaps;
 +using osu.Game.Scoring;
++using osu.Game.Screens.Play;
 +
 +namespace osu.Game.LocalPriority
 +{
@@ -16,6 +20,7 @@ index 0000000000..47091a733b
 +    /// Patchsu: optional pause penalty (Settings → Patchsu → "Patch 4. Pause PP penalty"), taken from the Torii client.
 +    /// Every pause during a play multiplies its PP by <see cref="MULTIPLIER_PER_PAUSE"/> (7% per pause, compounding).
 +    /// Unlike Torii (where the server only penalises ranked plays) it applies to every beatmap, ranked or not.
++    /// Pauses before the first hit object, during a break or after the last hit object are free.
 +    /// Pauses are recorded on <see cref="ScoreInfo.Pauses"/> by <c>SubmittingPlayer.Pause()</c>.
 +    /// </summary>
 +    public static class LocalPausePenalty
@@ -31,6 +36,17 @@ index 0000000000..47091a733b
 +        public static bool Enabled { get; internal set; }
 +
 +        /// <summary>
++        /// Loads the beatmap a score was set on, to tell which of its pauses are free (set by <see cref="LocalProfileManager"/>).
++        /// Without it every pause costs PP.
++        /// </summary>
++        internal static Func<BeatmapInfo, IBeatmap?>? GetBeatmap;
++
++        /// <summary>
++        /// Penalised pauses per score, so each beatmap is only read once per session (only scores with pauses are in it).
++        /// </summary>
++        private static readonly ConcurrentDictionary<Guid, (string Hash, int Pauses, int Penalised)> penalised_cache = new ConcurrentDictionary<Guid, (string, int, int)>();
++
++        /// <summary>
 +        /// Overrides the saved setting for the profile statistics calculated in the current async flow (null: use the setting),
 +        /// to compare the PP before and after the setting changes.
 +        /// </summary>
@@ -44,7 +60,76 @@ index 0000000000..47091a733b
 +        /// <summary>
 +        /// The number of pauses that cost PP on this score (0 while the penalty is off).
 +        /// </summary>
-+        public static int GetPenalisedPauses(ScoreInfo score) => Enabled ? score.Pauses?.Count ?? 0 : 0;
++        public static int GetPenalisedPauses(ScoreInfo score) => Enabled ? CountPenalisedPauses(score) : 0;
++
++        /// <summary>
++        /// The number of the score's pauses that cost PP while the penalty is on.
++        /// </summary>
++        public static int CountPenalisedPauses(ScoreInfo score)
++        {
++            int pauses = score.Pauses?.Count ?? 0;
++
++            if (pauses == 0)
++                return 0;
++
++            string hash = score.BeatmapHash;
++
++            if (penalised_cache.TryGetValue(score.ID, out var cached) && cached.Hash == hash && cached.Pauses == pauses)
++                return cached.Penalised;
++
++            IBeatmap? beatmap = null;
++
++            try
++            {
++                if (score.BeatmapInfo != null && score.BeatmapInfo.Hash == hash)
++                    beatmap = GetBeatmap?.Invoke(score.BeatmapInfo);
++            }
++            catch (Exception)
++            {
++                // A missing or broken beatmap: every pause counts.
++            }
++
++            if (beatmap == null || beatmap.HitObjects.Count == 0)
++                return pauses;
++
++            int result = CountPenalisedPauses(score.Pauses!, beatmap);
++            penalised_cache[score.ID] = (hash, pauses, result);
++            return result;
++        }
++
++        /// <summary>
++        /// The number of <paramref name="pauses"/> (gameplay times) on <paramref name="beatmap"/> that cost PP while the penalty is on.
++        /// </summary>
++        public static int CountPenalisedPauses(IList<int> pauses, IBeatmap beatmap)
++        {
++            if (beatmap.HitObjects.Count == 0)
++                return pauses.Count;
++
++            var (first, last) = beatmap.CalculatePlayableBounds();
++            int count = 0;
++
++            foreach (int time in pauses)
++            {
++                if (time >= first && time < last && !isInBreak(time, beatmap))
++                    count++;
++            }
++
++            return count;
++        }
++
++        /// <summary>
++        /// Whether <paramref name="time"/> is inside a break that gameplay shows (the same check as <see cref="BreakTracker"/>).
++        /// </summary>
++        private static bool isInBreak(double time, IBeatmap beatmap)
++        {
++            foreach (var b in beatmap.Breaks)
++            {
++                if (b.HasEffect && b.Contains(time))
++                    return true;
++            }
++
++            return false;
++        }
 +
 +        /// <summary>
 +        /// Applies the penalty for <paramref name="pauseCount"/> pauses to an unpenalised PP value.
@@ -66,7 +151,7 @@ index 0000000000..47091a733b
 +}
 diff --git a/osu.Game/LocalPriority/LocalPausePenaltySettings.cs b/osu.Game/LocalPriority/LocalPausePenaltySettings.cs
 new file mode 100644
-index 0000000000..24515bcb91
+index 0000000000..47641d722f
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalPausePenaltySettings.cs
 @@ -0,0 +1,41 @@
@@ -113,7 +198,7 @@ index 0000000000..24515bcb91
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileManager.PausePenalty.cs b/osu.Game/LocalPriority/LocalProfileManager.PausePenalty.cs
 new file mode 100644
-index 0000000000..d7f4dcc18b
+index 0000000000..94f2386e77
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileManager.PausePenalty.cs
 @@ -0,0 +1,52 @@
@@ -170,7 +255,7 @@ index 0000000000..d7f4dcc18b
 +    }
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileManager.cs b/osu.Game/LocalPriority/LocalProfileManager.cs
-index 7326d1e593..ba70e7a410 100644
+index 1c96dc93c4..31a46e0203 100644
 --- a/osu.Game/LocalPriority/LocalProfileManager.cs
 +++ b/osu.Game/LocalPriority/LocalProfileManager.cs
 @@ -157,6 +157,11 @@ private void checkPerformanceInputs()
@@ -185,7 +270,7 @@ index 7326d1e593..ba70e7a410 100644
          /// <summary>
          /// The game's selected mods (set by <see cref="OsuGameBase"/>), corrected to follow the active profile's mod rules.
          /// </summary>
-@@ -266,6 +271,14 @@ protected override void LoadComplete()
+@@ -271,6 +276,18 @@ protected override void LoadComplete()
                      ShowRankingChange(before, e.OldValue, gameRuleset.Value);
              });
              ShowNonCountingScores.BindValueChanged(_ => writeOptions());
@@ -197,10 +282,14 @@ index 7326d1e593..ba70e7a410 100644
 +                writeOptions();
 +                showPausePenaltyChange(e.OldValue, gameRuleset.Value);
 +            });
++
++            // Patch 4: pauses before the first hit object, in breaks or after the last hit object don't cost PP.
++            if (beatmapManager is BeatmapManager beatmaps)
++                LocalPausePenalty.GetBeatmap = beatmap => beatmaps.GetWorkingBeatmap(beatmap).Beatmap;
  
              if (api is APIAccess apiAccess)
                  apiAccess.OnlineAccountRequested += onOnlineAccountRequested;
-@@ -325,6 +338,7 @@ private void readOptions()
+@@ -332,6 +349,7 @@ private void readOptions()
              ShowTotalAccuracy.Value = options.ShowTotalAccuracy;
              CountEverythingAsRanked.Value = options.CountEverythingAsRanked;
              ShowNonCountingScores.Value = options.ShowNonCountingScores;
@@ -208,7 +297,7 @@ index 7326d1e593..ba70e7a410 100644
  
              readingOptions = false;
          }
-@@ -349,6 +363,7 @@ private void writeOptions()
+@@ -357,6 +375,7 @@ private void writeOptions()
                  ShowTotalAccuracy = ShowTotalAccuracy.Value,
                  CountEverythingAsRanked = CountEverythingAsRanked.Value,
                  ShowNonCountingScores = ShowNonCountingScores.Value,
@@ -216,7 +305,7 @@ index 7326d1e593..ba70e7a410 100644
              });
          }
  
-@@ -1877,6 +1892,9 @@ private void applyToApi()
+@@ -1903,6 +1922,9 @@ private void applyToApi()
              LocalPriorityPolicy.CountRelaxAutopilot = profile?.IncludeRelaxAutopilot == true;
              LocalPriorityPolicy.IgnoreUnrankedMods = profile?.IgnoreUnrankedMods == true;
  
@@ -227,7 +316,7 @@ index 7326d1e593..ba70e7a410 100644
              {
                  apiAccess.SetLocalProfilesUseOnlineAccount(Store.LocalProfilesUseOnlineAccount);
 diff --git a/osu.Game/LocalPriority/LocalProfileStatistics.cs b/osu.Game/LocalPriority/LocalProfileStatistics.cs
-index ca83b95259..c40531b1da 100644
+index f612766545..368ed7df7c 100644
 --- a/osu.Game/LocalPriority/LocalProfileStatistics.cs
 +++ b/osu.Game/LocalPriority/LocalProfileStatistics.cs
 @@ -224,6 +224,11 @@ private class ScoreSummary
@@ -242,15 +331,15 @@ index ca83b95259..c40531b1da 100644
              /// <summary>
              /// Synced plays only (set before Patchsu counted attempts): their hits and estimated play time count as one play.
              /// </summary>
-@@ -388,6 +393,7 @@ private static async Task<LocalProfileStatistics> calculateAsync(LocalProfile pr
+@@ -389,6 +394,7 @@ private static async Task<LocalProfileStatistics> calculateAsync(LocalProfile pr
                          Accuracy = score.Accuracy,
                          MaxCombo = score.MaxCombo,
                          Date = score.Date,
-+                        PenalisedPauses = LocalPausePenalty.AppliesToStatistics(options.PausePenalty) ? score.Pauses.Count : 0,
++                        PenalisedPauses = LocalPausePenalty.AppliesToStatistics(options.PausePenalty) ? LocalPausePenalty.CountPenalisedPauses(score) : 0,
                      };
  
                      if (full)
-@@ -437,6 +443,13 @@ private static async Task<LocalProfileStatistics> calculateAsync(LocalProfile pr
+@@ -438,6 +444,13 @@ private static async Task<LocalProfileStatistics> calculateAsync(LocalProfile pr
  
              store.SetCachedPerformance(newlyCalculated);
  
@@ -265,10 +354,10 @@ index ca83b95259..c40531b1da 100644
  
              // Best PP per beatmap.
 diff --git a/osu.Game/LocalPriority/LocalProfileStore.cs b/osu.Game/LocalPriority/LocalProfileStore.cs
-index f7a529d57a..44ce9e6ec4 100644
+index fc456cd6a6..b62075913d 100644
 --- a/osu.Game/LocalPriority/LocalProfileStore.cs
 +++ b/osu.Game/LocalPriority/LocalProfileStore.cs
-@@ -1307,6 +1307,11 @@ public class LocalProfileOptions : IEquatable<LocalProfileOptions>
+@@ -1491,6 +1491,11 @@ public class LocalProfileOptions : IEquatable<LocalProfileOptions>
          /// </summary>
          public bool ShowNonCountingScores { get; set; } = true;
  
@@ -280,7 +369,7 @@ index f7a529d57a..44ce9e6ec4 100644
          public LocalProfileOptions Clone() => (LocalProfileOptions)MemberwiseClone();
  
          public bool Equals(LocalProfileOptions? other) => other != null
-@@ -1321,13 +1326,14 @@ public bool Equals(LocalProfileOptions? other) => other != null
+@@ -1506,13 +1511,14 @@ public bool Equals(LocalProfileOptions? other) => other != null
                                                            && other.SwitchOnBeatmapStart == SwitchOnBeatmapStart
                                                            && other.ShowTotalAccuracy == ShowTotalAccuracy
                                                            && other.CountEverythingAsRanked == CountEverythingAsRanked
@@ -375,7 +464,7 @@ index be0b21ad7a..51908ff483 100644
              {
                  SkinnableContainer container = (SkinnableContainer)d;
 diff --git a/osu.Game/Screens/Ranking/Expanded/Statistics/PerformanceStatistic.cs b/osu.Game/Screens/Ranking/Expanded/Statistics/PerformanceStatistic.cs
-index c9285dc68e..aa17d1137b 100644
+index c9285dc68e..421a69fe72 100644
 --- a/osu.Game/Screens/Ranking/Expanded/Statistics/PerformanceStatistic.cs
 +++ b/osu.Game/Screens/Ranking/Expanded/Statistics/PerformanceStatistic.cs
 @@ -7,17 +7,27 @@
@@ -436,7 +525,7 @@ index c9285dc68e..aa17d1137b 100644
  
          public PerformanceStatistic(ScoreInfo score)
              : base(BeatmapsetsStrings.ShowScoreboardHeaderspp)
-@@ -40,8 +70,17 @@ public PerformanceStatistic(ScoreInfo score)
+@@ -40,8 +70,20 @@ public PerformanceStatistic(ScoreInfo score)
          }
  
          [BackgroundDependencyLoader]
@@ -452,10 +541,13 @@ index c9285dc68e..aa17d1137b 100644
 +            if (fly != null) AddInternal(flySample = new DrawableSample(fly));
 +            if (hit != null) AddInternal(hitSample = new DrawableSample(hit));
 +
++            // Patchsu: finds the free pauses (in breaks, ...) here, so a beatmap that isn't loaded yet is never read on the update thread.
++            LocalPausePenalty.CountPenalisedPauses(score);
++
              if (score.PP.HasValue)
              {
                  setPerformanceValue(score, score.PP.Value);
-@@ -68,29 +107,38 @@ private void setPerformanceValue(ScoreInfo scoreInfo, double? pp)
+@@ -68,29 +110,38 @@ private void setPerformanceValue(ScoreInfo scoreInfo, double? pp)
          {
              if (pp.HasValue)
              {
@@ -499,7 +591,7 @@ index c9285dc68e..aa17d1137b 100644
              }
          }
  
-@@ -108,6 +156,127 @@ public override void Appear()
+@@ -108,6 +159,127 @@ public override void Appear()
          {
              base.Appear();
              counter.Current.BindTo(performance);
@@ -627,7 +719,7 @@ index c9285dc68e..aa17d1137b 100644
          }
  
          protected override void Dispose(bool isDisposing)
-@@ -116,10 +285,63 @@ protected override void Dispose(bool isDisposing)
+@@ -116,10 +288,63 @@ protected override void Dispose(bool isDisposing)
              base.Dispose(isDisposing);
          }
  
@@ -694,10 +786,20 @@ index c9285dc68e..aa17d1137b 100644
      }
  }
 diff --git a/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs b/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs
-index cd81e2bb5b..f2a6f77dd0 100644
+index cd81e2bb5b..510a4d781b 100644
 --- a/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs
 +++ b/osu.Game/Screens/Select/BeatmapLeaderboardScore.Tooltip.cs
-@@ -307,7 +307,8 @@ private void load(BeatmapDifficultyCache difficultyCache, CancellationToken? can
+@@ -284,6 +284,9 @@ public PerformanceStatisticRow(LocalisableString label, ScoreInfo score)
+                 [BackgroundDependencyLoader]
+                 private void load(BeatmapDifficultyCache difficultyCache, CancellationToken? cancellationToken)
+                 {
++                    // Patchsu: finds the free pauses (in breaks, ...) here, so a beatmap that isn't loaded yet is never read on the update thread.
++                    LocalPausePenalty.CountPenalisedPauses(score);
++
+                     if (score.PP.HasValue)
+                     {
+                         setPerformanceValue(score, score.PP.Value);
+@@ -307,7 +310,8 @@ private void load(BeatmapDifficultyCache difficultyCache, CancellationToken? can
  
                  private void setPerformanceValue(ScoreInfo scoreInfo, double pp)
                  {
@@ -709,10 +811,10 @@ index cd81e2bb5b..f2a6f77dd0 100644
                      // Patchsu: a local profile can count every play as ranked (this profile only).
 diff --git a/osu.Game/Skinning/Components/PauseCountCounter.cs b/osu.Game/Skinning/Components/PauseCountCounter.cs
 new file mode 100644
-index 0000000000..32e2d5a1c2
+index 0000000000..f8c5a7f950
 --- /dev/null
 +++ b/osu.Game/Skinning/Components/PauseCountCounter.cs
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,177 @@
 +// Added by Patchsu
 +
 +using osu.Framework.Allocation;
@@ -734,7 +836,8 @@ index 0000000000..32e2d5a1c2
 +    /// Patchsu: pause counter for the skin layout editor (taken from the Torii client).
 +    ///
 +    /// With Settings → Patchsu "Reduce PP for pauses" on, every pause costs 7% of the play's PP (compounding,
-+    /// see <see cref="LocalPausePenalty"/>). This shows how many pauses the current play has, and by default
++    /// see <see cref="LocalPausePenalty"/>). This shows how many pauses of the current play cost PP (pauses before the first
++    /// hit object, in breaks or after the last hit object are free), and by default
 +    /// turns red as soon as there is one, so the penalty is visible during gameplay and not only on the results screen.
 +    ///
 +    /// Pauses are recorded on <c>ScoreInfo.Pauses</c> by <c>SubmittingPlayer.Pause()</c>; this only reads them.
@@ -767,6 +870,7 @@ index 0000000000..32e2d5a1c2
 +        private InnerCounter counter = null!;
 +        private OsuSpriteText penalty = null!;
 +
++        private int lastRecorded = -1;
 +        private int lastCount = -1;
 +        private bool lastPenaltyEnabled;
 +
@@ -838,13 +942,16 @@ index 0000000000..32e2d5a1c2
 +
 +        private void updateCount()
 +        {
-+            int count = gameplayState?.Score.ScoreInfo.Pauses.Count ?? 0;
++            var pauses = gameplayState?.Score.ScoreInfo.Pauses;
++            int recorded = pauses?.Count ?? 0;
 +
-+            if (count == lastCount && LocalPausePenalty.Enabled == lastPenaltyEnabled)
++            if (recorded == lastRecorded && LocalPausePenalty.Enabled == lastPenaltyEnabled)
 +                return;
 +
++            int count = recorded == 0 ? 0 : LocalPausePenalty.CountPenalisedPauses(pauses!, gameplayState!.Beatmap);
 +            bool newPause = count > lastCount && lastCount >= 0;
 +
++            lastRecorded = recorded;
 +            lastCount = count;
 +            lastPenaltyEnabled = LocalPausePenalty.Enabled;
 +            counter.Current.Value = count;
@@ -887,7 +994,7 @@ index 0000000000..32e2d5a1c2
 +}
 diff --git a/osu.Game/Skinning/SkinComponentGroupAttribute.cs b/osu.Game/Skinning/SkinComponentGroupAttribute.cs
 new file mode 100644
-index 0000000000..072015664c
+index 0000000000..8fe200c926
 --- /dev/null
 +++ b/osu.Game/Skinning/SkinComponentGroupAttribute.cs
 @@ -0,0 +1,27 @@

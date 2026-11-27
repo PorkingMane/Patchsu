@@ -303,8 +303,63 @@ index 0000000000..4662580743
 +        }
 +    }
 +}
+diff --git a/osu.Game/LocalPriority/LocalInterfaceSettings.cs b/osu.Game/LocalPriority/LocalInterfaceSettings.cs
+new file mode 100644
+index 0000000000..a3ae7c8ce4
+--- /dev/null
++++ b/osu.Game/LocalPriority/LocalInterfaceSettings.cs
+@@ -0,0 +1,49 @@
++// Patched for fun and personal needs. I suggest playing osu!lazer instead of this client. All modifications are done with AI from personal interest.
++// Peppy openly stated that he does not like using AI and we completely respect it. I only do it for research purposes and to see what features I would love in lazer.
++// To use it you'll need to compile it on your PC using provided .sh / .cmd files.
++// This client modification does not break any osu! rules or terms of service and do not conflict with osu! rules for account banning
++// However, I do not take any liablity if your account will be banned for accessing beatmap, leaderboard and metadata downloading
++// Use responsibly and preferably local-only.
++
++using System.Collections.Generic;
++using System.Linq;
++using osu.Framework.Allocation;
++using osu.Framework.Bindables;
++using osu.Framework.Graphics;
++using osu.Framework.Localisation;
++using osu.Game.Graphics.UserInterfaceV2;
++using osu.Game.Overlays.Settings;
++
++namespace osu.Game.LocalPriority
++{
++    /// <summary>
++    /// Settings → Patchsu → "Patch 3. Interface Improvements".
++    /// </summary>
++    public partial class LocalInterfaceSettings : PatchSettingsSubsection
++    {
++        public override int PatchNumber => 3;
++
++        protected override string Summary => @"Interface Improvements";
++
++        public override IEnumerable<LocalisableString> FilterTerms => base.FilterTerms.Concat(new LocalisableString[] { @"skip", @"break" });
++
++        /// <summary>
++        /// Whether solo plays and replays show a skip button in breaks that have more than 3 seconds left.
++        /// </summary>
++        public static Bindable<bool> GetSkipBreaks() => PatchsuSettings.Current.GetBindable(@"Interface", @"SkipBreaks", true);
++
++        [BackgroundDependencyLoader]
++        private void load()
++        {
++            Children = new Drawable[]
++            {
++                new SettingsItemV2(new FormCheckBox
++                {
++                    Caption = @"Allow skipping breaks longer than 3 seconds",
++                    HintText = @"Shows the skip button in breaks during solo plays and replays. Skipping leaves 3 seconds of the break.",
++                    Current = GetSkipBreaks(),
++                }),
++            };
++        }
++    }
++}
 diff --git a/osu.Game/Online/Leaderboards/LeaderboardManager.cs b/osu.Game/Online/Leaderboards/LeaderboardManager.cs
-index d4a258a307..baf351c1e8 100644
+index d4a258a307..d94fd5e646 100644
 --- a/osu.Game/Online/Leaderboards/LeaderboardManager.cs
 +++ b/osu.Game/Online/Leaderboards/LeaderboardManager.cs
 @@ -5,6 +5,8 @@
@@ -388,7 +443,7 @@ index d4a258a307..baf351c1e8 100644
                      };
                      newRequest.Failure += ex =>
                      {
-@@ -192,10 +203,87 @@ private void localScoresChanged(IRealmCollection<ScoreInfo> sender, ChangeSet? c
+@@ -192,10 +203,90 @@ private void localScoresChanged(IRealmCollection<ScoreInfo> sender, ChangeSet? c
                  }
              }
  
@@ -414,9 +469,7 @@ index d4a258a307..baf351c1e8 100644
 +
 +            var cancellationSource = performanceCancellation = new CancellationTokenSource();
 +            var token = cancellationSource.Token;
- 
--            var newScoresArray = newScores.ToArray();
--            scores.Value = LeaderboardScores.Success(newScoresArray, scoresRequested: newScoresArray.Length, totalScores: newScoresArray.Length, null);
++
 +            Task.Run(() => fillPerformance(unsorted, token), token).ContinueWith(_ => Schedule(() =>
 +            {
 +                if (token.IsCancellationRequested || !ReferenceEquals(CurrentCriteria, criteria))
@@ -470,6 +523,11 @@ index d4a258a307..baf351c1e8 100644
 +                {
 +                    Logger.Log($@"Patchsu: could not calculate PP for leaderboard sorting: {e.Message}");
 +                }
+ 
+-            var newScoresArray = newScores.ToArray();
+-            scores.Value = LeaderboardScores.Success(newScoresArray, scoresRequested: newScoresArray.Length, totalScores: newScoresArray.Length, null);
++                // The difficulty cache returns null (doesn't throw) when cancelled: never keep that as the score having no PP.
++                cancellationToken.ThrowIfCancellationRequested();
 +
 +                score.PP = pp;
 +
@@ -479,7 +537,7 @@ index d4a258a307..baf351c1e8 100644
          }
  
          protected override void Dispose(bool isDisposing)
-@@ -203,6 +291,7 @@ protected override void Dispose(bool isDisposing)
+@@ -203,6 +294,7 @@ protected override void Dispose(bool isDisposing)
              base.Dispose(isDisposing);
  
              localScoreSubscription?.Dispose();
@@ -487,7 +545,7 @@ index d4a258a307..baf351c1e8 100644
          }
      }
  
-@@ -211,7 +300,8 @@ public record LeaderboardCriteria(
+@@ -211,7 +303,8 @@ public record LeaderboardCriteria(
          RulesetInfo? Ruleset,
          BeatmapLeaderboardScope Scope,
          Mod[]? ExactMods,
@@ -597,6 +655,83 @@ index 4d7685aec9..581ef3d830 100644
                  case LeaderboardSortMode.Accuracy:
                      return scores.OrderByDescending(s => s.Accuracy).ThenByDescending(s => s.TotalScore);
  
+diff --git a/osu.Game/Screens/Play/Player.cs b/osu.Game/Screens/Play/Player.cs
+index 084401c5dd..78661b96dd 100644
+--- a/osu.Game/Screens/Play/Player.cs
++++ b/osu.Game/Screens/Play/Player.cs
+@@ -157,6 +157,9 @@ public override bool RequiresPortraitOrientation
+         protected SkipOverlay SkipIntroOverlay { get; private set; }
+         private SkipOverlay skipOutroOverlay;
+ 
++        // Patchsu (0003): holds the skip button of the current break, if any.
++        private Container breakSkipContainer;
++
+         protected ScoreProcessor ScoreProcessor { get; private set; }
+ 
+         protected HealthProcessor HealthProcessor { get; private set; }
+@@ -518,6 +521,7 @@ private Drawable createOverlayComponents()
+                         RequestSkip = () => progressToResults(false),
+                         Alpha = 0
+                     },
++                    breakSkipContainer = new Container { RelativeSizeAxes = Axes.Both },
+                     DrawableRuleset.ResumeOverlay?.CreateProxy() ?? new Container(),
+                     PauseOverlay = new PauseOverlay
+                     {
+@@ -534,12 +538,54 @@ private Drawable createOverlayComponents()
+                 SkipIntroOverlay.Expire();
+                 skipOutroOverlay.Expire();
+             }
++            else if ((this is SoloPlayer || this is ReplayPlayer) && LocalPriority.LocalInterfaceSettings.GetSkipBreaks().Value)
++                breakTracker.CurrentPeriod.BindValueChanged(onBreakPeriodChanged);
+ 
+             return container;
+         }
+ 
+         protected virtual SkipOverlay CreateSkipOverlay(double startTime) => new SkipOverlay(startTime);
+ 
++        /// <summary>
++        /// How much of a break is left after skipping it.
++        /// </summary>
++        private const double break_skip_remaining_time = 3000;
++
++        private void onBreakPeriodChanged(ValueChangedEvent<Period?> period)
++        {
++            breakSkipContainer.Clear();
++
++            if (period.NewValue == null)
++                return;
++
++            double skipTarget = period.NewValue.Value.End - break_skip_remaining_time;
++
++            // same minimum the intro skip has.
++            if (skipTarget - GameplayClockContainer.CurrentTime < MasterGameplayClockContainer.MINIMUM_SKIP_TIME)
++                return;
++
++            // the overlay stops offering the skip MINIMUM_SKIP_TIME before the time it's given.
++            breakSkipContainer.Add(new SkipOverlay(skipTarget + MasterGameplayClockContainer.MINIMUM_SKIP_TIME)
++            {
++                RequestSkip = () =>
++                {
++                    if (GameplayClockContainer.CurrentTime >= skipTarget)
++                        return;
++
++                    samplePlaybackDisabled.Value = true;
++
++                    // frame stable playback ignores jumps over 500ms after gameplay start (outside of tests and debug builds),
++                    // so it's turned off for one frame, like SetGameplayStartTime() does.
++                    bool wasFrameStable = DrawableRuleset.FrameStablePlayback;
++                    DrawableRuleset.FrameStablePlayback = false;
++                    Seek(skipTarget);
++                    ScheduleAfterChildren(() => DrawableRuleset.FrameStablePlayback = wasFrameStable);
++
++                    updateSampleDisabledState();
++                }
++            });
++        }
++
+         private void onBreakTimeChanged(ValueChangedEvent<bool> isBreakTime)
+         {
+             updateGameplayState();
 diff --git a/osu.Game/Screens/Select/BeatmapCarouselFilterSorting.cs b/osu.Game/Screens/Select/BeatmapCarouselFilterSorting.cs
 index 5aa3698e9e..6996afd09e 100644
 --- a/osu.Game/Screens/Select/BeatmapCarouselFilterSorting.cs

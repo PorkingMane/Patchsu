@@ -30,3 +30,4 @@
 
 # Patchsu patches that should not be present publically just yet
 /Patchsu/patches/1[0-9][0-9][0-9]-*.patch
+/Patchsu/patches/0002b*.patch

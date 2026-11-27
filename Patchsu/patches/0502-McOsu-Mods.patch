@@ -3,6 +3,7 @@ Patchsu patch 502 (optional): McOsu mods ported to lazer (osu! ruleset): Mafham 
 Needs 0001 only. Also applies together with every other patch (in glob order).
 
 Mod select shows a "from McOsu" plaque on both mods (the "M" circle of patch 500's "from Modosu" plaque, green text).
+Both mods have their own mod icons (embedded in osu.Game: Textures/Icons/Mods/mcosu-*.png).
 
 Mafham (MH, Fun): "Maybe infinity IS finite after all?" McOsu's approach rate of negative infinity.
   Every object except spinners is on screen at once, without approach circles, follow points or the "not hittable yet" dim
@@ -94,10 +95,10 @@ index c0d2124a3b..0712114f86 100644
              double aimNoSlidersTopWeightedSliderCount = aimWithoutSliders.CountTopWeightedSliders(aimNoSlidersDifficultyValue);
 diff --git a/osu.Game.Rulesets.Osu/Mods/OsuModClickControl.cs b/osu.Game.Rulesets.Osu/Mods/OsuModClickControl.cs
 new file mode 100644
-index 0000000000..ddadc50f7c
+index 0000000000..a87fe37803
 --- /dev/null
 +++ b/osu.Game.Rulesets.Osu/Mods/OsuModClickControl.cs
-@@ -0,0 +1,376 @@
+@@ -0,0 +1,379 @@
 +// Added by Patchsu
 +
 +using System;
@@ -106,12 +107,14 @@ index 0000000000..ddadc50f7c
 +using osu.Framework.Allocation;
 +using osu.Framework.Graphics;
 +using osu.Framework.Graphics.Containers;
++using osu.Framework.Graphics.Sprites;
 +using osu.Framework.Input.Bindings;
 +using osu.Framework.Input.Events;
 +using osu.Framework.Localisation;
 +using osu.Framework.Testing;
 +using osu.Game.Audio;
 +using osu.Game.Beatmaps.Timing;
++using osu.Game.Graphics;
 +using osu.Game.Rulesets.Judgements;
 +using osu.Game.Rulesets.Mods;
 +using osu.Game.Rulesets.Objects;
@@ -154,6 +157,7 @@ index 0000000000..ddadc50f7c
 +
 +        public override string Name => "Click Control";
 +        public override string Acronym => "CC";
++        public override IconUsage? Icon => OsuIcon.ModClickControl;
 +        public override LocalisableString Description => "Unnecessary clicks count as misses.";
 +        public override ModType Type => ModType.DifficultyIncrease;
 +
@@ -476,10 +480,10 @@ index 0000000000..ddadc50f7c
 +}
 diff --git a/osu.Game.Rulesets.Osu/Mods/OsuModMafham.cs b/osu.Game.Rulesets.Osu/Mods/OsuModMafham.cs
 new file mode 100644
-index 0000000000..3e5f43ee37
+index 0000000000..70c5dca422
 --- /dev/null
 +++ b/osu.Game.Rulesets.Osu/Mods/OsuModMafham.cs
-@@ -0,0 +1,1892 @@
+@@ -0,0 +1,1894 @@
 +// Added by Patchsu
 +
 +using System;
@@ -502,6 +506,7 @@ index 0000000000..3e5f43ee37
 +using osu.Framework.Timing;
 +using osu.Game.Beatmaps;
 +using osu.Game.Configuration;
++using osu.Game.Graphics;
 +using osu.Game.Online.API;
 +using osu.Game.Overlays.Settings;
 +using osu.Game.Rulesets.Mods;
@@ -575,6 +580,7 @@ index 0000000000..3e5f43ee37
 +
 +        public override string Name => "Mafham";
 +        public override string Acronym => "MH";
++        public override IconUsage? Icon => OsuIcon.ModMafham;
 +        public override LocalisableString Description => "Maybe infinity IS finite after all?";
 +        public override ModType Type => ModType.Fun;
 +
@@ -2431,6 +2437,60 @@ index 280185ba17..b0f44b30a5 100644
                                             });
  
              difficultyFillFlowContainer.Clear();
+diff --git a/osu.Game/Graphics/OsuIcon.cs b/osu.Game/Graphics/OsuIcon.cs
+index 1135b21114..d9a1230dd8 100644
+--- a/osu.Game/Graphics/OsuIcon.cs
++++ b/osu.Game/Graphics/OsuIcon.cs
+@@ -153,6 +153,7 @@ public static class OsuIcon
+         public static IconUsage ModBubbles => get(OsuIconMapping.ModBubbles);
+         public static IconUsage ModCinema => get(OsuIconMapping.ModCinema);
+         public static IconUsage ModClassic => get(OsuIconMapping.ModClassic);
++        public static IconUsage ModClickControl => get(OsuIconMapping.ModClickControl); // McOsu mod icon (embedded in osu.Game).
+         public static IconUsage ModConstantSpeed => get(OsuIconMapping.ModConstantSpeed);
+         public static IconUsage ModCover => get(OsuIconMapping.ModCover);
+         public static IconUsage ModDaycore => get(OsuIconMapping.ModDaycore);
+@@ -175,6 +176,7 @@ public static class OsuIcon
+         public static IconUsage ModHidden => get(OsuIconMapping.ModHidden);
+         public static IconUsage ModHoldOff => get(OsuIconMapping.ModHoldOff);
+         public static IconUsage ModInvert => get(OsuIconMapping.ModInvert);
++        public static IconUsage ModMafham => get(OsuIconMapping.ModMafham); // McOsu mod icon (embedded in osu.Game).
+         public static IconUsage ModMagnetised => get(OsuIconMapping.ModMagnetised);
+         public static IconUsage ModMirror => get(OsuIconMapping.ModMirror);
+         public static IconUsage ModMovingFast => get(OsuIconMapping.ModMovingFast);
+@@ -583,6 +585,9 @@ private enum OsuIconMapping
+             [Description(@"Mods/mod-classic")]
+             ModClassic,
+ 
++            [Description(@"Mods/mcosu-click-control")]
++            ModClickControl,
++
+             [Description(@"Mods/mod-constant-speed")]
+             ModConstantSpeed,
+ 
+@@ -649,6 +654,9 @@ private enum OsuIconMapping
+             [Description(@"Mods/mod-invert")]
+             ModInvert,
+ 
++            [Description(@"Mods/mcosu-mafham")]
++            ModMafham,
++
+             [Description(@"Mods/mod-magnetised")]
+             ModMagnetised,
+ 
+diff --git a/osu.Game/OsuGameBase.cs b/osu.Game/OsuGameBase.cs
+index 948a5cf4de..1f82fc4569 100644
+--- a/osu.Game/OsuGameBase.cs
++++ b/osu.Game/OsuGameBase.cs
+@@ -481,6 +481,9 @@ private void addFilesWarning()
+ 
+         protected virtual void InitialiseFonts()
+         {
++            // McOsu mod icons are embedded in this assembly.
++            Resources.AddStore(new DllResourceStore(typeof(OsuGameBase).Assembly));
++
+             AddFont(Resources, @"Fonts/Torus/Torus-Regular");
+             AddFont(Resources, @"Fonts/Torus/Torus-Light");
+             AddFont(Resources, @"Fonts/Torus/Torus-SemiBold");
 diff --git a/osu.Game/Overlays/Mods/AttributeExponentCounter.cs b/osu.Game/Overlays/Mods/AttributeExponentCounter.cs
 new file mode 100644
 index 0000000000..767cafd070
@@ -2972,3 +3032,144 @@ index 79c34abe69..eab7491e17 100644
                  ]
              };
  
+diff --git a/osu.Game/Textures/Icons/Mods/mcosu-click-control.png b/osu.Game/Textures/Icons/Mods/mcosu-click-control.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..86cac2033ce2447c99ab9760bcb417e6b7464185
+GIT binary patch
+literal 2212
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/osu.Game/Textures/Icons/Mods/mcosu-mafham.png b/osu.Game/Textures/Icons/Mods/mcosu-mafham.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..c1e6818a2f1a1e6bed9006dea4663c01a91ef574
+GIT binary patch
+literal 3151
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/osu.Game/osu.Game.csproj b/osu.Game/osu.Game.csproj
+index 91a13c3859..ee13c4b893 100644
+--- a/osu.Game/osu.Game.csproj
++++ b/osu.Game/osu.Game.csproj
+@@ -17,6 +17,9 @@
+       <PackagePath>icon.png</PackagePath>
+     </None>
+   </ItemGroup>
++  <ItemGroup Label="McOsu mod icons">
++    <EmbeddedResource Include="Textures\Icons\Mods\mcosu-*.png" />
++  </ItemGroup>
+   <ItemGroup Label="Package References">
+     <!-- Held back due to licencing change stupidness. Silenced vulnerability does not affect us. -->
+     <PackageReference Include="AutoMapper" Version="13.0.1">

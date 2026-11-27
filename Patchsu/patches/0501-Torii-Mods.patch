@@ -6,9 +6,7 @@ none of them collide with stock osu!lazer mods or with 0500 (Ritsu).
   Fun (osu!):                      Hit Sounder (HS)
   Fun (osu!, taiko, catch, mania): Pitch Adjust (PA)
 
-Mod select shows a "from Torii" plaque on these mods.
-Pitch Adjust uses a music-note mod icon sized like the stock icons (embedded in osu.Game), since Torii's own icon
-texture is not part of osu! resources.
+Both mods have their own mod icons sized like the stock icons (embedded in osu.Game: Textures/Icons/Mods/torii-*.png).
 Torii's automatic Pitch Adjust / pitch-changing DT-HT deselection is not ported.
 
 Replay mod toggles (formerly the separate patch 0007c, old numbering; built only when 0005 is applied too, which defines PATCHSU_REPLAY_MOD_TOGGLES
@@ -45,7 +43,7 @@ index 79c3150fce..ccdd42b5e1 100644
                  case ModType.System:
 diff --git a/osu.Game.Rulesets.Osu/Mods/OsuModHitSounder.cs b/osu.Game.Rulesets.Osu/Mods/OsuModHitSounder.cs
 new file mode 100644
-index 0000000000..53457dad7f
+index 0000000000..735bbcf304
 --- /dev/null
 +++ b/osu.Game.Rulesets.Osu/Mods/OsuModHitSounder.cs
 @@ -0,0 +1,309 @@
@@ -105,7 +103,7 @@ index 0000000000..53457dad7f
 +    /// which sounds wrong for exactly that reason.
 +    /// </para>
 +    /// </remarks>
-+    public partial class OsuModHitSounder : Mod, IApplicableToDrawableRuleset<OsuHitObject>, IApplicableToBeatmap, IToriiExclusiveMod
++    public partial class OsuModHitSounder : Mod, IApplicableToDrawableRuleset<OsuHitObject>, IApplicableToBeatmap
 +#if PATCHSU_REPLAY_MOD_TOGGLES
 +        , IToggleableInReplay
 +#endif
@@ -114,7 +112,7 @@ index 0000000000..53457dad7f
 +        public override string Acronym => "HS";
 +        public override LocalisableString Description => "Hitsounds follow your fingers, not the notes. Mash freely.";
 +        public override ModType Type => ModType.Fun;
-+        public override IconUsage? Icon => OsuIcon.Metronome;
++        public override IconUsage? Icon => OsuIcon.ModHitSounder;
 +
 +        /// <summary>
 +        /// Ranked: this mod only moves sound around. It does not touch hit
@@ -383,23 +381,27 @@ index bc9f1c5f25..f9d62c3c5a 100644
  
                  case ModType.System:
 diff --git a/osu.Game/Graphics/OsuIcon.cs b/osu.Game/Graphics/OsuIcon.cs
-index 1135b21114..562d9272cf 100644
+index 1135b21114..1a47ce6822 100644
 --- a/osu.Game/Graphics/OsuIcon.cs
 +++ b/osu.Game/Graphics/OsuIcon.cs
-@@ -186,6 +186,7 @@ public static class OsuIcon
+@@ -186,6 +186,8 @@ public static class OsuIcon
          public static IconUsage ModNoScope => get(OsuIconMapping.ModNoScope);
          public static IconUsage ModOneKey => get(OsuIconMapping.ModOneKey);
          public static IconUsage ModPerfect => get(OsuIconMapping.ModPerfect);
 +        public static IconUsage ModPitchAdjust => get(OsuIconMapping.ModPitchAdjust); // Torii mod icon (embedded in osu.Game).
++        public static IconUsage ModHitSounder => get(OsuIconMapping.ModHitSounder); // Torii mod icon (embedded in osu.Game).
          public static IconUsage ModRandom => get(OsuIconMapping.ModRandom);
          public static IconUsage ModRelax => get(OsuIconMapping.ModRelax);
          public static IconUsage ModRepel => get(OsuIconMapping.ModRepel);
-@@ -682,6 +683,9 @@ private enum OsuIconMapping
+@@ -682,6 +684,12 @@ private enum OsuIconMapping
              [Description(@"Mods/mod-perfect")]
              ModPerfect,
  
 +            [Description(@"Mods/torii-pitch-adjust")]
 +            ModPitchAdjust,
++
++            [Description(@"Mods/torii-hit-sounder")]
++            ModHitSounder,
 +
              [Description(@"Mods/mod-random")]
              ModRandom,
@@ -418,123 +420,9 @@ index c44efa34e5..6e63386161 100644
              Fonts.AddStore(new OsuIcon.OsuIconStore(Textures));
          }
  
-diff --git a/osu.Game/Overlays/Mods/ModPanel.cs b/osu.Game/Overlays/Mods/ModPanel.cs
-index df72692f48..d3cc9aa2c4 100644
---- a/osu.Game/Overlays/Mods/ModPanel.cs
-+++ b/osu.Game/Overlays/Mods/ModPanel.cs
-@@ -51,6 +51,9 @@ public ModPanel(Mod mod)
-         private void load(OsuColour colours)
-         {
-             AccentColour = colours.ForModType(Mod.Type);
-+
-+            // Patchsu 0501: "from Torii" plaque.
-+            ToriiModPlaque.TryAttach(Mod, MainContentContainer, Active);
-         }
- 
-         protected override void LoadComplete()
-diff --git a/osu.Game/Overlays/Mods/ToriiModPlaque.cs b/osu.Game/Overlays/Mods/ToriiModPlaque.cs
-new file mode 100644
-index 0000000000..b631a8fe75
---- /dev/null
-+++ b/osu.Game/Overlays/Mods/ToriiModPlaque.cs
-@@ -0,0 +1,75 @@
-+// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
-+// See the LICENCE file in the repository root for full licence text.
-+
-+using osu.Framework.Bindables;
-+using osu.Framework.Graphics;
-+using osu.Framework.Graphics.Containers;
-+using osu.Framework.Graphics.Sprites;
-+using osu.Game.Graphics;
-+using osu.Game.Graphics.Sprites;
-+using osu.Game.Rulesets.Mods;
-+using osuTK;
-+using osuTK.Graphics;
-+
-+namespace osu.Game.Overlays.Mods
-+{
-+    /// <summary>
-+    /// The "from Torii" plaque in the top-right corner of a mod panel (Patchsu patch 0501).
-+    /// </summary>
-+    public static class ToriiModPlaque
-+    {
-+        // Torii gate vermillion.
-+        private static readonly Color4 torii_red = new Color4(255, 80, 60, 255);
-+        private static readonly Color4 torii_badge_active = new Color4(70, 20, 35, 255);
-+
-+        private const double transition_duration = 150;
-+
-+        public static void TryAttach(Mod mod, Container target, IBindable<bool> active)
-+        {
-+            if (mod is not IToriiExclusiveMod)
-+                return;
-+
-+            var icon = new SpriteIcon
-+            {
-+                Icon = FontAwesome.Solid.ToriiGate,
-+                Size = new Vector2(12),
-+                Anchor = Anchor.CentreLeft,
-+                Origin = Anchor.CentreLeft,
-+                Colour = torii_red,
-+            };
-+
-+            var text = new OsuSpriteText
-+            {
-+                Text = "from Torii",
-+                Font = OsuFont.Default.With(size: 9, weight: FontWeight.SemiBold),
-+                Colour = torii_red,
-+                Anchor = Anchor.CentreLeft,
-+                Origin = Anchor.CentreLeft,
-+            };
-+
-+            target.Add(new Container
-+            {
-+                Anchor = Anchor.TopRight,
-+                Origin = Anchor.TopRight,
-+                AutoSizeAxes = Axes.Both,
-+                Margin = new MarginPadding { Right = 6, Top = 5 },
-+                Shear = -OsuGame.SHEAR,
-+                Child = new FillFlowContainer
-+                {
-+                    AutoSizeAxes = Axes.Both,
-+                    Direction = FillDirection.Horizontal,
-+                    Spacing = new Vector2(3, 0),
-+                    Children = new Drawable[] { icon, text },
-+                },
-+            });
-+
-+            var activeCopy = active.GetBoundCopy();
-+            activeCopy.BindValueChanged(a =>
-+            {
-+                Color4 colour = a.NewValue ? torii_badge_active : torii_red;
-+                icon.FadeColour(colour, transition_duration, Easing.OutQuint);
-+                text.FadeColour(colour, transition_duration, Easing.OutQuint);
-+            }, true);
-+        }
-+    }
-+}
-diff --git a/osu.Game/Rulesets/Mods/IToriiExclusiveMod.cs b/osu.Game/Rulesets/Mods/IToriiExclusiveMod.cs
-new file mode 100644
-index 0000000000..21b8eb050f
---- /dev/null
-+++ b/osu.Game/Rulesets/Mods/IToriiExclusiveMod.cs
-@@ -0,0 +1,13 @@
-+// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
-+// See the LICENCE file in the repository root for full licence text.
-+
-+namespace osu.Game.Rulesets.Mods
-+{
-+    /// <summary>
-+    /// marca un mod como exclusivo de torii. la tarjeta del mod-select le pone
-+    /// el badge "torii exclusive" con la gate roja.
-+    /// </summary>
-+    public interface IToriiExclusiveMod
-+    {
-+    }
-+}
 diff --git a/osu.Game/Rulesets/Mods/ModPitchAdjust.cs b/osu.Game/Rulesets/Mods/ModPitchAdjust.cs
 new file mode 100644
-index 0000000000..8bd5d2224a
+index 0000000000..5275f18167
 --- /dev/null
 +++ b/osu.Game/Rulesets/Mods/ModPitchAdjust.cs
 @@ -0,0 +1,231 @@
@@ -581,7 +469,7 @@ index 0000000000..8bd5d2224a
 +    /// changes rate continuously while PA is trying to keep one pitch offset.
 +    /// </para>
 +    /// </remarks>
-+    public class ModPitchAdjust : Mod, IApplicableToTrack, IToriiExclusiveMod
++    public class ModPitchAdjust : Mod, IApplicableToTrack
 +#if PATCHSU_REPLAY_MOD_TOGGLES
 +        , IToggleableInReplay
 +#endif
@@ -769,33 +657,102 @@ index 0000000000..8bd5d2224a
 +        }
 +    }
 +}
+diff --git a/osu.Game/Textures/Icons/Mods/torii-hit-sounder.png b/osu.Game/Textures/Icons/Mods/torii-hit-sounder.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..712899f5f16cf07b904bb95f6237390838774566
+GIT binary patch
+literal 2353
+zcmeAS@N?(olHy`uVBq!ia0y~yV5neVU<l!0V_;zL<oZ0Hfq~<Pr;B4q#jUq<>w98C
+zMUUHCThG<o9j#%%#9qN<>C#-2U+(n*(w!F_vJw_<RB`#^?78roSs?Q)g=H>BS9EUt
+z(-_q4deQ!Z3#Zt^sTyw0f3$K{FM0^9&0V=-&D9B9cjwNXJM*#p`<T7^_WZtAyZiCE
+z+1tOXOrGm=Z}0m%zxO^rZu@=C?ph_M1)qXceH<Aq0x%GRj0S_u3iTCH0(Q@srZdlO
+z)NVNHAp1l41NVc%2j3kwD->^I+QC+#zd=ZX;UAX`^BZP9&Hs1R1z$c(@9W4Bo)~y?
+z*>u+@X1SMj<MKr(PPeJBRaLsZ`^4*dySpJ5y&E4NFmL2;Z1c*n{+7v*zv_z4)%&{~
+za}zi>a7hI3d$h;w>v!%3+XLDMKIL&0#83B|e2u~VOSS9@%Ri0F{>3r6HOv=rc$v#m
+zm-R8cRHv<NRbIo_Rol{84|q2SbLE&G<<HRgkk7RGs+@T1G)8@f^yr#L5es}-e+6BQ
+zSo&?zbB6QL+V@%4O?-9ufGaDr_yhj~M-MnY-8}EngwWDG?InMfvi&GaaBRz3{km&E
+z{|$ye+KbQEJ@7v8Q})rvm<OkC<xA~dDEB|_>GpRY_<0V9GgzN~<I2CX-SXiFn`kAY
+zmG|>MzWJOZSm}2AkDH6u<tH1Jl-#%MZ&oVmOW!?v%h@HSZ5A^N&(HSMuTo>Yw~ATD
+zUvf{!iK_Gergfjl%>BIU-`@IJHt+hrmb<xxRcwoWEzuwGIIr_WpApj?btV0%NmBAV
+zI!<s3M!vXt-<0#MtBaZM<nt3*99&%1ea_kM;L>L)R&@H-`R`MCAGAt7u+vgvp2z*v
+zc-oX1-<F3ivOf5F=`@!9=u1B${S%&bov>p+;Z_?TV%A`OG$edAv#@#I%~O82w<ez6
+z)?c2WxGm}N{(U(N^`_5SW-!KEyIxIKtJ&W1<^TMOcj6PPh3-`vwQKIQQrqj+^j=f?
+zfc^G4VuBORi!AhCCu!aFxin4k(O+jVhi#{7m#6<uoo1YI?0?ElhPs<U{_aIN_S-Df
+z%J1^9zYVt*yBT)=+vh7&Bus19<S<Bot(w2w>#g|2YT+x74MVTny|0;n>+P2GtW|Ec
+zzpA@CWPBfFY9(7mnl-2%|Cc|n!)Cg{#Qq8fvGRhjsy9nNTU40}R%$eEca|#oD0$y3
+zH(0A-y5GULo6%F|TH3sI*A3la`}k+{nsS*F4;AaJ5?4<<zCI%Am`9jg|K)All`X&B
+zQeSgYOz>x-+wAv|zcU0UhP$S0eE!?a>c`$~4#iO%4ZmHU@U^?dJiB@PSHz49Ifwg}
+zdDP9HI`?8%tGM}-3l^S^6Rp#YqC!&|o_C!%-1ne$z3=XupSDDA?6~RTb<5{!RlN4Y
+z1If{R^AC!O%(R}(xbMQlsqaocochkQL;85~{^q`K=}Vu4NXC78<@Dj<(`?S<lfv=(
+zq6e~Nf1jFNEF&!EWjS{fque=*eL1NOf1LVif49s2{`Pe<XTo)rn0Gh-8J+H&<uTET
+z`ObvJ^AGYgy#05+B4_8B^s^@7`RAGLq|e>nSN>o|!6oI|ty7cOv%};w6>e{<y=-#!
+z{JoiF`_hb3-AyXj<*6>RUDo+{eX1&Z)~?fx+Ob<_O?<@l!93y8$1^G)rpp{<<b81b
+z!1F2dO@3K_Fni!`b#7T-_11IFnZozOqb3!m_dPhOEcq===J~qc#=q`Ocb2~K{{DPr
+zjiUCe|JH6k$Y!spWL~1+ti;_ht)s?f@&C8KV(#tpwW*x=+`{a2Sk|%UyQM2Hik^Sf
+zQX00YBI?~n?YCtPSO3c!eVX0xx3K>APu^K}w^tT^uPI%4USYe&4z<EP(>DK?`oMoS
+z-f!{a11oObw3!^g*(-D&^R}{#J4^ND-(I(Q%pSs}9lW9;Cu6rhgKod)|2=m1XB@f{
+zI`#Z-)BfF28-Bit$_)}a%RKLb)x2Gy*C&TtZ!wMhmy~d4@mYos=?VKn*{4qD*}tD{
+z9gCkZ*Ma}-)0ovo?;I03xV8JB+y|EH4V$m8a+txzt8qWOL`J)b<^S|^N?ONVxX-pN
+z&%A&8)_I}+P2!6!{W26IQ)hM8@km^G?|f}X+E$i+X6~&Aa&B<7_@vu>Ze+K;T_bMc
+zFYcBqHEZ#@2XgFUqKtQxR=x=A{Zr$5H8wPKUaW}R^ef92KR9h+cbzdjb<cO(17E{T
+zlY<mvZvE!%4}DrK9@zLJn?-c)F7vyrd+Z&(Zq1uldRt4*K0LH+(%nDHLmx$coDg*V
+zw>-1m%Id5`y4ESz?&Ybi;{MmdCg}5KXPW1C{YL4=bX|wXC0eRtdv9-=K9xmb{`G(J
+zH!Rtb_I4&e({`=-v%5I*0#zlB>)JG19prt`vo$|<f!4))Q8VA?v)4_(a6f9%qfblT
+z&iI*Ycrme+GlwVgy*#rT$90X;9<?B~5|JMg1?yRVF?=Xx-%;GLF4c?6f0pj8T(KPy
+z+qOMl5w3FM_?0~?e!tx2b%TjrV|RnUD#M*Eho-OIRWaM2VaAu!u?K1yHgHvFI-BY<
+z_X+0h(w5oFbcc7(Va7cB55~tIwg#RppUQb>ljnww>qFgV6sdnW%5pVlQT*}-Z?2-)
+zBnAuh*hNC~md%QlE8mg3js4h<9gklvb89;;tFnVVgZ%?<dsbdr#T~{6O~F9|D(hy|
+z2In<(>D_vy>Q$V(e8n^N(>!@MRev-e_%6I;d+yQM=k-r*jAO8nKg%9h-lEL=K)RDp
+z=+OV17mmLgA2Zw!36Yt>`(RpVlY7Ho%~d<u<}}A!`A>MzbWtGCHegbg*@Jrz7|I0$
+ziyRns9QcyUeZ$LX+tbSj4)gW@)_ky#p`h?3*8^tFpP{0Qd?u>QE>XUyd1<OkWz<17
+z@t!P~cGhOjmFwMN>sfw;wH?pZk~z27-N-Dhn`M8u#`>Kz7tGQ=kRMvR+a}Lg+&5O`
+zJ)hRDh%FZi&!p$P?{GGaU;F#vF44DHS@nz$m@YnSxis1EuG(F`J+m&P&3N(Opf}R&
+zwob=k#s^6k0~c}G?|zdSu=m;S!s{x3Pi?x*_T|06-}y%v3J$(l{L9dEfBDMrJAR%i
+z`@3G8>kVAg(jfce>Mu5ZtAGg)92lX9p<n?jQmFrB{##Uig~$b;cMPDmkgK1|I;Vst
+E0HP3Z;{X5v
+
+literal 0
+HcmV?d00001
+
 diff --git a/osu.Game/Textures/Icons/Mods/torii-pitch-adjust.png b/osu.Game/Textures/Icons/Mods/torii-pitch-adjust.png
 new file mode 100644
-index 0000000000000000000000000000000000000000..8d4c42b0418f6ac78b37611b2e5d000b5a835479
+index 0000000000000000000000000000000000000000..c76094cf1e3c44a29dc54782bbbe82248477efa5
 GIT binary patch
-literal 1142
-zcmeAS@N?(olHy`uVBq!ia0y~yV5neVU<l!0V_;zL<oZ0Hfq_9G*(1o8fuTx`fuW&=
-zf#DYe14F|L28L1t28LG&3=CE?7#PG0=IjczVPIfjOY(MiVfYV%3-&Ib%)r3FUgGKN
-z%KnO5lv!ARamukQ1_lPz64!{5l*E!$tK_28#FA77BLgEdT|+}%Bf}5_V=F^TD`PWl
-z0|P4qgWH>Q)KN6#=BH$)RpQpL>iv}23=9k!a2rZ8b5n~;5_1bM^_ZALED7}3{*r-#
-zIn2|=F{I+w+dJpIMG|F>fBgPx)kII1v=Fwa5H`=Uw-0o!#J;F|1hnre@3wL~{;$b_
-z=T+SGS5l7_HYs#*ZPtr){Q3L#)5w`+=_P4b=gxdz7iYln`rHqj^X>1?7@xD_Rzd-f
-z0#)C$O_@0J=)Sm>BKa1pE6o?Ym~^P;2D1)xcjb1|KBje>Jr{&7ke6U`Yb-v%Q6OD0
-zul)98sXN<(!k#BS5HS$jCisA3gZZ9x-WO+g>wDhPdeC##Qmjsne|@?7o9(m8_nW<*
-z;(a@0?$YOa4_XptuRV9ESiIl@ClB*-+wgQLJ*K{uw-^(+EM70|Kl|y*&n%8@!V)~!
-zug`sPpUHs#4g0Q7?@DGleoSJhkU8|0g)ir@p>E4h$qH_t_FTppJj?$$eHJMYwUA=U
-zyQcJkw}Ssni@|*c`9}GP(Tff)x-aL-esuCyp7*`0&q+RzHDLd9GvR*U9_v}twl|nh
-z+GZu~BCoV$$9_GL^Ni=2=Why27o5+L+j_krydnC4@`LbOufCkfKEPJPvHV`?y~90^
-zO%t+&7nbpCO%yny&-!K#Q<)#5_40<f!3WN1COj9}P|S715-fb~^Z!NLeQ(ZVbk}?!
-zp~)1>>%WG}pYeJpXSsonku~!h?uUBfm9{}snEF<5e`hgZjA81VTKct_iBIWa8AEu3
-zb)u=us=J@_>V;VEMC=qku$RX>M(e=3J-;U`*~0k#!kIFe9kUDn2EF}!qcvn!L$tx>
-zw~TpA?3>Maf6V><Lq*f|fbOiDe9X^h-^k~ynEG8pRkP-R?wp(7m}`CCm~-wqS3PHv
-zh}8qJ^EvyO?GK;&zhxfdcVoSof=)XozFjr*Y;@J>v@*-LE;@gDSIxBbsQe>pJlkmV
-z!VGKG<`V~cXWxuzE6C1E;gK-5PD$fGo1^$}hIg7-Zrb&;Yu58T6#FGI_wbo-+6BB7
-zOffw7A6{hr!~1$x9E1L0rER5e|2_P*tmTx1;pUratIDsPaoZdcc2{-bwy!g8<{7{4
-z`&}z3vbQPPZ1dXC#Mpvv>Am6G6hcmV8vmZOv1)!>c4p?PHM*H;ujf3UnX4`OEh$Jm
-zK)=Az`1TtvTQ1Jf8^Zh4GFc<CUQB5E>#ymieD-D7!LANeApM_#kKy6dh?by944?wV
-L)z4*}Q$iB}+2Pzr
+literal 1686
+zcmeAS@N?(olHy`uVBq!ia0y~yV5neVU<l!0V_;zL<oZ0Hfq^a7)5S5Q;?~=_)g2+F
+zBFF8E=U&T<zHYj8Nli$^lmu2bSJ$9#eI^&=*d(Wlx_&z##C1qPt13ai>QA89-jy#F
+zE{J?PE77%8G?LSG#trAUiZ8eEJ+`<k|2)Pj_T8Ct$>nL^-~BvfV7=M+`@eVZi|e0%
+zw|efgDnjRx*E**4Ozdxp4(K5h4Y7PTp2CP7JFUciNdAzss97MY_w;saX{LR`>dLvy
+zZp?S@HLbp`cwp&)R)^yZD|cUYU_7CHN9=*F`NgZR*&et*h<qTLU|o<j`E-f4f$PI%
+zqIqI77|#?7$L>7Fbh|;W*m>DkL-~qboT;;zYF0ZKPyFBdUY6s}E8QLCzSqKpGLEK-
+z<cU>qRcttT{UXyELp94)Tc(wNby#u#Aj6IoQ^i8v6z_BF;pWK?sGP@gY|6_0TfUuc
+zXDqjP@N0_U-+NUH*3Lg)u2nE|-ey-vw@`z>AKxAb<l9kq!tz1D1L*}@=btkciV$s-
+zp0eVyKoQ>$g=O>04w!!FwoDNE;K?~T?s|eqM4C^*g8utTYb}<)XMJ{&QK$64R!w>4
+zpB@id?d;A^J>Z$PA)LXgvG{B0y)7>;PY7N6VRK}HUO}J#<VU4*ww=o144&S<<;I8N
+z>CET99Q>)yG`lDB+{=&FU%s0CjkhSxb`9HXcDyFt<iqss4^BnBJ$*noYUR!ujn{)7
+zG+3QC_4$3FhUJRQgZu@y&#c#;xb-FX*UdeWk?RAB-#2Jq(0jo6pfLF7#g(TvS!sXC
+zdyrro=GeHFVV=42v!Gq#KQ2W~x7lP^xRrUGkMfsF#t%Cq6Ao;7m3bi2RIXlX!-*O9
+zoBq{0ru4~~=kq_DpZDv<1|R<yGB+8&FS@%->AXR`_?ZRT{ChawgdSe;Q<YimjkiDJ
+zzm<<H>KQhl4bj`fdB5zy)lBPxjg48)7t0<fH9c3&oWi?Dw8DkG`syp*ly=SL9OY$=
+zfqXlv_Hxyv`z)GkrK@SEu;|RE7df_J)*HkkBHV92%er}MYfidVLRQq~eJ8$5FKnKd
+z^=0C>&yUZ_><CM3TzP<{_0Lr1b-u3~pH5sEyyJ0kXy@JeMX%WEG!1903S*sX_x4j@
+zN$srl*QXjcubZ<kykz<AgX?n-B&DQl#_;D|w0!$+A)CeA3$J$x-{@RZ!rBph;4hD(
+zs%SyrLc2A^w`_R=mkQU_vKAaKpUzxnnSeqZ&||-&uv8{^6XW|rAC)xSU92~x3nytS
+zNxxH;x%`05M(|_(EM^(u$E6#a|I6HxUR(Qx?e;D9b4-jI>>nx2kmXXVGTI=-$sNfg
+zlfOr)_!#@DxzAe9lqerend>oyxzxpBowL%v?aKcmJ6Y#AnLVm^*u!1SmT~aOZV&Uq
+z)B3GDcDIQ=NqJQ)QNd>sl|O?=sBM<V0Zo;+hibEy9hxy;On91Qz?w6Dy7AJFq-%wR
+zs)E+0F+G?5|7wq%^~8qt?u-8I@?FQv_8_fJaL18~^tOqdv7u};`rQ^uY?|n><?|$t
+z3YiZR;&P(pUGIEfZs&Zb&PeUrc2UkuO>=kunY&_Bcg?*JrORNZBKYBK>Ls}=LC-vS
+zH9jk;oHI8#cxUqj57sKl3SAeb8#xYltR8G!!q)JANx-XCnOQsiR5ZQnUn?Xe`xun(
+zwmZ(+(C;MkZ1H_b=0BcJ;hWsPU9>zb_A!k)|4er8N<QHYd-__o-q<5ssWR`!-Wdx%
+zM)tPdej#>;)yKRxXf5;V4To;6(3`UP-o^h>bER*8%6Bum#j3`6`u(qYTg}#g{J-Oo
+z3)4KtJ@IPS-Bb&zMc(+Ru&taZ)%xW6iCI^-EtoD?w<E)N+r-u3XN@k#9<b)xzWmht
+zwnDdDtE*9d#Yq#+n*}dh;G?wVz!IxD_jGpjvc+7fdyy>LA#x_kUGWpg`#)=Lws<H{
+z{L_EQX01z*N#u#bQmHcK?+oz<M>d^hJ78+1?iZdh>%EiEx;G1cO7Z1foNbc#Rab^3
+zkEL(H$=h?!o|$}g)w68AO&1N~qO-P#oon})Hpf4+z$ce=7FW$(Z>xu#9ySK^^rPHX
+z9{#e^z{BjPxbn@E+^B~F??g=uYZv}cbG~0{Dm`Jo)P~5k>k7O5UD<7ZnDX7!-}d+Y
+zK9hp&C-!Rn4v%gSp78XP?}>Tu{r;qv#@uTHm)5cy!W*%r<~LFzzr-z{O?OvV!+D<p
+ORN=V#xvX<aXaWE@aUWd(
 
 literal 0
 HcmV?d00001

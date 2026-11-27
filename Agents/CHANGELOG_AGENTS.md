@@ -1,5 +1,150 @@
 Changelog go in patch numerical order, so 0001 will be first and 1000 will be last unless its a breaking change.
 
+## 2026-11-27 · 0002 Fetched osu! plays don't keep osu!'s PP
+
+- **0002** Fix: plays fetched from osu! without a replay kept osu!'s own `pp` (`SoloScoreInfo.ToScoreInfo` copies it into
+  `ScoreInfo.PP`). 0003's PP sort only calculates PP for scores without one, so these sorted by osu!'s (often older) PP
+  next to locally calculated PP. The fetch now saves them with `PP = null`; `clearBanchoScoresPP` (`TakeMigration(3)`, on load)
+  clears it once on already fetched plays (no online ID, no replay file, on a local profile). Plays with a downloaded replay
+  were already fine (`.osr` has no PP).
+- Checked: `TestSceneBanchoTopPlays` 16/16 (new `TestOlderFetchedPlaysLoseBanchoPP`, fetch test asserts PP is null); p2 / p3 /
+  opt tests on the full stack 117/117 (+ `RitsuVariantOutputTest`, a manual dump tool for the osu! ruleset tests). Full stack 0 warnings.
+
+## 2026-11-27 · 0003 PP sort: a cancelled calculation no longer leaves a play without PP
+
+- **0003** Fix: `LeaderboardManager.fillPerformance` kept a play's PP as "none" (sorted last as -1, cached in
+  `calculatedPerformance` for the session) when its calculation was cancelled by a newer fetch: lazer's
+  `BeatmapDifficultyCache` returns null on cancellation instead of throwing. It now checks the token before keeping the
+  result. Seen as an older fetched play (first in realm order, so usually the one being calculated) sorting below a play
+  with less PP while its tooltip showed the right PP.
+- Checked: new `p3-tests/TestSceneLeaderboardPPSortCancel` (a difficulty cache that waits until released or cancelled) fails
+  without the fix and passes with it; the user's two plays copied from their realm: 227.6 vs 180.4 pp, sorted right.
+  Full stack 0 warnings, p2 / p3 / opt tests 119/119.
+
+## 2026-11-27 · 0500 / 0501 / 0502 New mod icons
+
+- **0500** New icons for Decoy Circles, Miss Challenge and No Sliding; RandomV2 gets its own icon (`ritsu-random-v2.png`,
+  `OsuIcon.ModRandomV2`) instead of stock Random.
+- **0501** New Pitch Adjust icon; Hit Sounder gets its own icon (`torii-hit-sounder.png`, `OsuIcon.ModHitSounder`) instead of Metronome.
+- **0502** Click Control and Mafham get mod icons (`mcosu-*.png`) instead of acronyms. 0502 embeds them itself (OsuIcon entries,
+  osu.Game resource store, csproj item), placed so it applies with or without 0500/0501.
+- All icons 120x84 white on transparent like the stock ones, from the maintainer's FigCraft file (`assets/`).
+- Bigger after an in-game check: Decoy Circles, Click Control (x1.35), Miss Challenge, No Sliding, Mafham (x1.4, up to
+  106 px wide) and Hit Sounder (x1.1). Pitch Adjust unchanged.
+- Redrawn Decoy Circles, No Sliding and Mafham (taller eye) from the updated FigCraft file; RandomV2 x1.35, Mafham x1.5
+  (112 px wide).
+- Redrawn again: Mafham (infinity in the eye, FigCraft group "Mafham 2.2"), Decoy Circles (x1.45, 81 px tall), No Sliding, Hit Sounder.
+- Redrawn Decoy Circles and No Sliding once more; No Sliding at x1.33 (0.95 of the earlier x1.4).
+- Checked: each of 0500/0501/0502 on 0001 alone, every pair and all three apply and build with 0 warnings (without 0005 too);
+  full stack 0 warnings; Mafham / Click Control / replay toggle / opt tests pass; a scratch test confirms every icon texture resolves.
+
+## 2026-11-27 · 0002b P2P multiplayer lobby (LAN test)
+
+- **0002b** New patch (needs 0002): Main menu → Play → "multi" opens "Multiplayer · P2P". Entering hosts a lobby on TCP 13381;
+  "Create Code" shows an 8 symbol code (host LAN IPv4 + checksum, copied to the clipboard), "Connect via Code" joins one. Lobby members
+  float around your own avatar like ranked play's queue; local profiles send their picture. Connecting only, no gameplay yet.
+  No new dependencies.
+- Checked: new `p2b-tests/P2PLobbyTest.cs` 7/7; on screen (scratch app, 2560x1440): three loopback guests appear (two with
+  pictures, one without), one leaving fades out, no errors in the log.
+- **0002b** Entry animation: header, notice and the two side columns slide and fade in one after another; the centre
+  (your avatar and the lobby) scales in with OutElasticHalf. Leaving fades out. Content is centred vertically (same padding above
+  and below). "Your code" is no longer ReadOnly, so it can be selected and copied; anything typed into it is put back.
+- **0002b** Own background: osu!'s `Backgrounds/bg2` (`BackgroundScreenCustom`), blur sigma 5, colour Gray(0.6) (40% darker),
+  instead of the menu's background with its triangles.
+
+## 2026-11-27 · 0002 Speedrun takes the page's ruleset, cached profile pictures drawn 1:1
+
+- **0002** "New 'Speedrun' profile" takes the ruleset shown on the profile page (`profileRuleset`, falling back to the game's),
+  not the game's. Starting the run also selects that ruleset in the game (`mutableRuleset`, skipped while it's disabled), so
+  the carousel shows the PP the goal counts. Plain / Sudden Death / Perfect Death profiles don't change the game ruleset.
+- **0002** Fix: `CachedDrawBuffer` (statistics block, score rows) rounds its screen-space size to whole pixels
+  (`ComputeScreenSpaceDrawQuad`). The frame buffer is `ceil(size)` pixels; drawn back into a fractional size with nearest
+  sampling (pixel snapping) it dropped or doubled a pixel row depending on the sub-pixel scroll position. At 2560x1440 with
+  UI scale 1, after the page springs back from an overscroll, text in the statistics block looked cut by 1px at the bottom.
+- Checked: on screen at 2560x1440 (scratch app, 51 sub-pixel scroll offsets): before, the "PP history" text changed shape
+  between offsets; after, it's the same at every offset. New `TestRunUsesPageRuleset` (taiko on the page, game on osu! →
+  taiko goal, game switches to taiko); `TestSceneSpeedrunProfiles` 6/6. Full stack: Release 0 warnings, 273/273 + 50/50, 1000 applies on top.
+
+## 2026-11-27 · 0003 skip button in breaks
+
+- **0003** Solo plays and replays (`this is SoloPlayer || this is ReplayPlayer`, not multiplayer/playlists/spectating) show
+  lazer's own `SkipOverlay` in breaks. `Player` binds `BreakTracker.CurrentPeriod`: on each break it adds one
+  `SkipOverlay(target + MINIMUM_SKIP_TIME)` to `breakSkipContainer` (cleared when the break ends), target = period end − 3 s
+  (the tracker's period, fade-out excluded). Only when ≥ 1 s is skippable. Skipping seeks there with samples disabled, like
+  the intro skip. `SkipOverlay` itself is unchanged.
+- **0003** Fix: in release builds the skip froze the playfield (music and timer kept going). `FrameStabilityContainer` ignores
+  clock jumps over 500 ms after gameplay start as bad BASS times, except in tests and debug builds. The skip now turns
+  `DrawableRuleset.FrameStablePlayback` off for one frame around the seek, as lazer's `SetGameplayStartTime` does.
+  `TestSceneBreakSkip` also checks the frame-stable clock; with that guard forced on, it fails without the fix and passes with it.
+- **0003** First Settings → Patchsu subsection for 0003: "Patch 3. Interface Improvements" → "Allow skipping breaks longer
+  than 3 seconds" (`LocalInterfaceSettings`, `PatchsuSettings` "Interface"/"SkipBreaks", default on, read when the player loads).
+- Checked: full stack, Vanilla+, 0001+0003 and full+1000 apply; full and Vanilla+ build 0 warnings. New
+  `p3-tests/TestSceneBreakSkip.cs` 2/2; full stack (Release build): osu.Game.Tests 273/273, osu.Game.Rulesets.Osu.Tests 50/50 (p1000-tests left out).
+
+## 2026-11-27 · 0002 Estimated global rank for all four rulesets
+
+- **0002** New PP-to-rank curves for osu!, taiko, catch and mania (`LocalPriorityPolicy.Profiles.cs`, `osu_rank_curve` …
+  `mania_rank_curve`, ~40 points each, highest PP first) from the osu! performance data dumps of 2026-11-05: every player of the
+  top 10,000 plus 10,000 random players per ruleset (`rank_score` / `rank_score_index`). They replace the old osu!-only curve
+  (Ritsu / Modosu / MOsu) and its exponential rule above the best sample. ln(rank) is interpolated linearly in PP (was rank),
+  more PP than #1 is #1, below the lowest sample is the last rank. Median error against the real ranks: 0% at #1–9 (the
+  samples), 1.5–3% at #10–99, about 1% from #100 down. The curves are a snapshot, so the top drifts as the leaderboard moves.
+- **0002** API: `EstimateGlobalRank(string ruleset, double pp)` → `int?` and `EstimatePPForRank(string ruleset, int rank)` →
+  `double?` (null for rulesets without a curve), `HasRankEstimate(string ruleset)`. The profile page, toolbar statistics update
+  and Speedrun goals (`#rank` goals, the estimated other half) now work in every built-in ruleset; custom rulesets show "-" /
+  "Not estimated for this ruleset." Profile page hint: "Estimate based on top 10000 and 10000 random accounts grabbed."
+- Checked: 0002 applies on lazer + 0001 (tree identical to the work clone); full stack applies in glob order, 1000 applies on
+  top; Release build 0 warnings. `TestSceneSpeedrunProfiles` updated (per-ruleset least-PP inverse at rank edges, more PP never
+  gives a worse rank, custom ruleset gets no estimate): 5/5; other p2 tests 91/91. Full stack: 272/272 + 49/50 (Mafham
+  `TestWholeMapShownAtOnce`, order-dependent, passes alone).
+
+## 2026-11-27 · 0004 pauses in breaks, before the first object or after the last object are free
+
+- **0004** Every recorded pause cost 7%, including pauses during the lead-in and in breaks. Now only pauses between the first hit
+  object and the end of the last one, outside breaks, count. `LocalPausePenalty.CountPenalisedPauses(ScoreInfo)` checks the
+  vanilla `ScoreInfo.Pauses` timestamps against the beatmap: before `CalculatePlayableBounds().start`, at/after its end, or inside a
+  `BreakPeriod` with `HasEffect && Contains(time)` (the same break window as `BreakTracker`, fade-out excluded) is free. The beatmap
+  comes from `LocalPausePenalty.GetBeatmap` (set by `LocalProfileManager` to `BeatmapManager.GetWorkingBeatmap(..).Beatmap`), only
+  for scores with pauses, cached per score ID (+ beatmap hash, pause count). No beatmap / no objects: every pause counts.
+  `ScoreInfo.Pauses` itself is never changed (it is submitted and sent to spectators). Applies to old scores too.
+- **0004** Used by the results screen, leaderboard tooltips and profile statistics (both read the beatmap in `load()`, off the
+  update thread). The pause counter skin component counts only pauses that cost PP (`gameplayState.Beatmap`, recalculated only
+  when a pause is recorded).
+- Checked: 0004 applies on lazer + 0001 + 0002; full stack applies in glob order, osu.Desktop builds 0 warnings. Tests: new
+  `p4-tests/PausePenaltyFreePausesTest.cs` 7/7, p4-tests 11/11; full stack: osu.Game.Tests 269/269, osu.Game.Rulesets.Osu.Tests
+  50/50 (p1000-tests left out; `p3-tests/TestSceneBreakSkip.cs` doesn't compile, `LocalInterfaceSettings` not found, unrelated).
+
+## 2026-11-27 · 0002 "Fetch top plays": rate limit, own API key for other players, confirmation, 10-minute wait
+
+- **0002** Every request Patchsu itself sends to osu! waits for one shared limiter (`BanchoRequestLimiter`, ≥ 1 s between
+  request starts, process-wide, = osu!'s 60 requests/minute): player lookup, score pages, beatmap and replay downloads,
+  API key tokens, through the account or the key alike. Lazer's own requests aren't limited.
+- **0002** Where the plays come from (`LocalProfileManager.pickBanchoSource`): a profile named like the signed-in account
+  (case-insensitive, space = underscore) goes through that account, with "Online lookups on local profiles" on while a local
+  profile is active. Any other player needs the user's own osu! API key: group "osu! API key for other players' plays" in
+  Settings → Patchsu → Patch 2 (client ID, masked client secret; `LocalProfiles.ApiClientId` / `ApiClientSecret` in
+  PatchsuSettings.json). Player, score pages and replays then go through `api/v2` with a client-credentials token (`public`
+  scope, cached, renewed on 401); a rejected key cancels the fetch with a message. Without a key, the fetch says so and sends
+  nothing. Beatmaps are downloaded only with the signed-in account (without it: "N skipped (sign in to download their
+  beatmaps)"). The fetch button is greyed out (and leads to online lookups) only while online lookups are off and no key is set.
+  Files: `BanchoPlaySources.cs` (`IBanchoPlaySource`, `AccountBanchoPlaySource`, `ApiKeyBanchoPlaySource`), `BanchoRequestLimiter.cs`.
+- **0002** Once the player is found, `BanchoConfirmDialog` asks "Fetch the top plays of X?" (says which account / key it uses and
+  about the wait) before the score pages or anything else are requested; "No" or dismissing it ends the fetch. After a confirmed
+  fetch ends (downloads included, also cancelled / failed), the next one waits 10 minutes (`BANCHO_FETCH_COOLDOWN_MINUTES`,
+  all profiles, `LocalProfiles.TopPlaysFetchEndedAt` in PatchsuSettings.json, capped at 10 minutes if the clock goes back).
+  During the wait the fetch button looks unclickable (`BanchoFetchCoolingDown`, cleared by itself when the wait ends) but
+  clicking it still works: it sends nothing and posts the time left ("Try again in 7 minutes 5 seconds").
+- Checked: 0002 applies on lazer + 0001; full stack applies in glob order, with and without 1000; Release builds 0 warnings.
+  Tests: `TestSceneBanchoTopPlays` 15/15 (`TestOtherPlayerNeedsApiKey`, `TestOtherPlayerUsesApiKey`,
+  `TestApiKeyWithoutSignInSkipsBeatmaps`, `TestRequestsAreRateLimited`, `TestDeclineSendsNothingElse`,
+  `TestWaitStartsWhenDownloadsFinish`, `TestButtonGreyedOutWhileWaiting`; every fetch confirms via `confirmFetch()`, the setup
+  resets the wait; settings items off screen don't animate, so colour checks scroll the button into view first), new
+  `p2-tests/BanchoApiKeySourceTest.cs` 4/4 (mock HTTP server: token form, bearer + `x-api-version`, URLs, token renewal,
+  rejected key, spacing), `TestSceneProfileColours` updated for the new settings group. Full stack: 262/262 + 49/50 Patchsu tests pass (the one is Mafham below);
+  with 1000: p1000-tests + Bancho tests 50 passed, 1 skipped. `TestSceneOsuModMafham.TestWholeMapShownAtOnce` (0502) can fail
+  when run in a batch (order-dependent, unrelated). Dialog and settings group checked on screen. Not checked against the real
+  osu! API with a real key.
+
 ## 2026-11-26 · Patchsu-CLI uses the patches on GitHub's main branch when they're newer
 
 - **Patchsu-CLI** On start, it now checks `Patchsu/patches` on the repo's `main` branch (`internal/release/branch.go`). If the last
@@ -151,7 +296,7 @@ What changed with it:
   notification when the goal is reached. "Reset SD/PF/SP profile count" resets their numbering too.
 - **0002** "Fetch top 200 plays of <profile> from osu!" (Settings → Patch 2): adds that osu! player's best plays (current mode),
   downloads missing beatmaps after asking (one swipeable progress notification), then their replays where available.
-  Skips plays already there. Needs "Online lookups on local profiles".
+  Skips plays already there.
 - **0002** Estimated global rank no longer stops at #120: it keeps improving above ~18,300pp, down to #1.
 - **0002** SD/PF: countdown is 30 s (setting brings back 1 minute), shows seconds only, and only the last 3 s make a sound.
   On the last look, Best Performance scores fade away one by one (lowest PP first, #1 last) and rows below glide up.

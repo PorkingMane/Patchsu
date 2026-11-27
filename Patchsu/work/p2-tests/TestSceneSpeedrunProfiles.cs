@@ -12,6 +12,7 @@ using osu.Game.Graphics.UserInterface;
 using osu.Game.LocalPriority;
 using osu.Game.Online.API;
 using osu.Game.Overlays;
+using osu.Game.Rulesets;
 using osu.Game.Rulesets.Osu;
 using osuTK.Input;
 
@@ -104,7 +105,7 @@ namespace osu.Game.Tests.Visual.Navigation
 
             AddUntilStep("timer on the page", () => timer() != null);
             AddAssert("timer is greenish white", () => timer()!.Colour.TopLeft.SRGB.G > 0.95f && timer()!.Colour.TopLeft.SRGB.R is > 0.8f and < 0.9f && timer()!.Colour.TopLeft.SRGB.B is > 0.8f and < 0.95f);
-            AddUntilStep("goal under it, with its estimated rank", () => text($"#{LocalPriorityPolicy.EstimateGlobalRank(1250):N0} • {1250:N0}pp") != null);
+            AddUntilStep("goal under it, with its estimated rank", () => text($"#{rankFor(1250):N0} • {1250:N0}pp") != null);
             string? first = null;
             AddStep("note time", () => first = timer()!.Text);
             AddWaitStep("wait", 5);
@@ -174,9 +175,9 @@ namespace osu.Game.Tests.Visual.Navigation
             startOnPlainProfile();
             openGoalWindow();
             AddStep("type 400", () => goalBox().Text = "400");
-            AddUntilStep("estimated rank shown", () => text($"#{LocalPriorityPolicy.EstimateGlobalRank(400):N0} • 400pp") != null);
+            AddUntilStep("estimated rank shown", () => text($"#{rankFor(400):N0} • 400pp") != null);
             AddStep("type #10000", () => goalBox().Text = "#10000");
-            AddUntilStep("estimated PP shown", () => text($"#{10000:N0} • {LocalPriorityPolicy.EstimatePPForRank(10000):N0}pp") != null);
+            AddUntilStep("estimated PP shown", () => text($"#{10000:N0} • {ppFor(10000):N0}pp") != null);
             AddStep("type #", () => goalBox().Text = "#");
             AddUntilStep("NaN placeholder for an unfinished goal", () => text("#NaN • NaNpp") != null);
             AddStep("type #10000", () => goalBox().Text = "#10000");
@@ -186,7 +187,23 @@ namespace osu.Game.Tests.Visual.Navigation
                 InputManager.Click(MouseButton.Left);
             });
             AddUntilStep("rank goal only", () => manager.ActiveProfile.Value?.Speedrun is { TargetPP: null, TargetRank: 10000 });
-            AddUntilStep("goal under the timer", () => text($"#{10000:N0} • {LocalPriorityPolicy.EstimatePPForRank(10000):N0}pp") != null);
+            AddUntilStep("goal under the timer", () => text($"#{10000:N0} • {ppFor(10000):N0}pp") != null);
+        }
+
+        [Test]
+        public void TestRunUsesPageRuleset()
+        {
+            startOnPlainProfile();
+            AddAssert("game on osu!", () => Game.Ruleset.Value.ShortName, () => Is.EqualTo("osu"));
+            AddStep("show taiko on the page", () =>
+                overlay.ChildrenOfType<LocalProfileOverlay.LocalProfileHeader>().Single().Ruleset.Value = Game.Dependencies.Get<RulesetStore>().GetRuleset("taiko")!);
+            AddWaitStep("let the page refresh", 5);
+            openGoalWindow();
+            AddStep("type 500", () => goalBox().Text = "500");
+            AddUntilStep("taiko estimate shown", () => text($"#{LocalPriorityPolicy.EstimateGlobalRank("taiko", 500):N0} • 500pp") != null);
+            AddStep("start", () => InputManager.Key(Key.Enter));
+            AddUntilStep("taiko goal", () => manager.ActiveProfile.Value?.Speedrun?.Ruleset, () => Is.EqualTo("taiko"));
+            AddAssert("game switched to taiko", () => Game.Ruleset.Value.ShortName, () => Is.EqualTo("taiko"));
         }
 
         [Test]
@@ -194,29 +211,59 @@ namespace osu.Game.Tests.Visual.Navigation
         {
             AddAssert("pp shown rounded", () => new LocalSpeedrun { TargetPP = 1000 }.IsReachedBy(999.6));
             AddAssert("pp below", () => !new LocalSpeedrun { TargetPP = 1000 }.IsReachedBy(999.4));
-            AddAssert("rank", () => new LocalSpeedrun { TargetRank = LocalPriorityPolicy.EstimateGlobalRank(5000) }.IsReachedBy(5000));
-            AddAssert("rank not yet", () => !new LocalSpeedrun { TargetRank = LocalPriorityPolicy.EstimateGlobalRank(5000) }.IsReachedBy(4000));
-            AddAssert("both needed", () => !new LocalSpeedrun { TargetPP = 9000, TargetRank = LocalPriorityPolicy.EstimateGlobalRank(5000) }.IsReachedBy(6000));
-            AddAssert("rank only in osu!", () => !new LocalSpeedrun { Ruleset = "mania", TargetRank = 1_000_000 }.IsReachedBy(5000));
+            AddAssert("rank", () => new LocalSpeedrun { TargetRank = rankFor(5000) }.IsReachedBy(5000));
+            AddAssert("rank not yet", () => !new LocalSpeedrun { TargetRank = rankFor(5000) }.IsReachedBy(4000));
+            AddAssert("both needed", () => !new LocalSpeedrun { TargetPP = 9000, TargetRank = rankFor(5000) }.IsReachedBy(6000));
+            AddAssert("rank in every built-in ruleset", () => new LocalSpeedrun { Ruleset = "mania", TargetRank = 1_000_000 }.IsReachedBy(5000));
+            AddAssert("no rank for other rulesets", () => !new LocalSpeedrun { Ruleset = "custom", TargetRank = 1_000_000 }.IsReachedBy(5000));
             AddAssert("no goal never", () => !new LocalSpeedrun().IsReachedBy(5000));
 
-            foreach (int rank in new[] { 1, 3, 50, 119, 120, 121, 553, 10000, 500000, 2852393, 2852394, 5000000 })
+            foreach (string ruleset in new[] { "osu", "taiko", "fruits", "mania" })
             {
-                AddAssert($"PP for #{rank} is the least that reaches it", () =>
+                foreach (int rank in new[] { 1, 2, 3, 50, 119, 120, 121, 553, 9999, 10000, 10001, 300000, 304983, 304984, 3192119, 5000000 })
                 {
-                    double pp = LocalPriorityPolicy.EstimatePPForRank(rank);
-                    return pp >= 1 && pp % 1 == 0 && LocalPriorityPolicy.EstimateGlobalRank(pp) <= rank && (pp == 1 || LocalPriorityPolicy.EstimateGlobalRank(pp - 1) > rank);
+                    AddAssert($"{ruleset}: PP for #{rank} is the least that reaches it", () =>
+                    {
+                        double pp = LocalPriorityPolicy.EstimatePPForRank(ruleset, rank)!.Value;
+                        return pp >= 1 && pp % 1 == 0 && LocalPriorityPolicy.EstimateGlobalRank(ruleset, pp) <= rank
+                               && (pp == 1 || LocalPriorityPolicy.EstimateGlobalRank(ruleset, pp - 1) > rank);
+                    });
+                }
+
+                AddAssert($"{ruleset}: more PP never gives a worse rank", () =>
+                {
+                    int previous = int.MaxValue;
+
+                    for (double pp = 1; pp < 40000; pp += 7)
+                    {
+                        int rank = LocalPriorityPolicy.EstimateGlobalRank(ruleset, pp)!.Value;
+                        if (rank > previous)
+                            return false;
+
+                        previous = rank;
+                    }
+
+                    return previous == 1;
                 });
             }
 
-            AddAssert("ranks better than the curve's best are reachable", () => new LocalSpeedrun { TargetRank = 3 }.IsReachedBy(LocalPriorityPolicy.EstimatePPForRank(3)));
-            AddAssert("#3 needs more than #120", () => LocalPriorityPolicy.EstimatePPForRank(3), () => Is.GreaterThan(LocalPriorityPolicy.EstimatePPForRank(120) + 1000));
-            AddAssert("curve unchanged below its best sample", () => LocalPriorityPolicy.EstimateGlobalRank(17051.7), () => Is.EqualTo(211));
-            AddAssert("pp goal described", () => LocalSpeedrun.DescribeGoal("osu", 400, null), () => Is.EqualTo($"#{LocalPriorityPolicy.EstimateGlobalRank(400):N0} • {400:N0}pp"));
-            AddAssert("rank goal described", () => LocalSpeedrun.DescribeGoal("osu", null, 3), () => Is.EqualTo($"#3 • {LocalPriorityPolicy.EstimatePPForRank(3):N0}pp"));
-            AddAssert("no estimate outside osu!", () => LocalSpeedrun.DescribeGoal("mania", 400, null), () => Is.EqualTo($"{400:N0}pp"));
+            AddAssert("ranks near the top are reachable", () => new LocalSpeedrun { TargetRank = 3 }.IsReachedBy(ppFor(3)));
+            AddAssert("#3 needs more than #120", () => ppFor(3), () => Is.GreaterThan(ppFor(120) + 1000));
+            AddAssert("sample points exact", () => rankFor(9604.45), () => Is.EqualTo(10000));
+            AddAssert("more PP than #1 is #1", () => rankFor(50000), () => Is.EqualTo(1));
+            AddAssert("other rulesets have no estimate", () => (LocalPriorityPolicy.EstimateGlobalRank("custom", 5000), LocalPriorityPolicy.EstimatePPForRank("custom", 10)),
+                () => Is.EqualTo(((int?)null, (double?)null)));
+            AddAssert("pp goal described", () => LocalSpeedrun.DescribeGoal("osu", 400, null), () => Is.EqualTo($"#{rankFor(400):N0} • {400:N0}pp"));
+            AddAssert("rank goal described", () => LocalSpeedrun.DescribeGoal("osu", null, 3), () => Is.EqualTo($"#3 • {ppFor(3):N0}pp"));
+            AddAssert("mania goal described with its own estimate", () => LocalSpeedrun.DescribeGoal("mania", 400, null),
+                () => Is.EqualTo($"#{LocalPriorityPolicy.EstimateGlobalRank("mania", 400):N0} • {400:N0}pp"));
+            AddAssert("no estimate for other rulesets", () => LocalSpeedrun.DescribeGoal("custom", 400, null), () => Is.EqualTo($"{400:N0}pp"));
             AddAssert("format", () => LocalSpeedrun.FormatTime(3847.329), () => Is.EqualTo("1:04:07.32"));
             AddAssert("format short", () => LocalSpeedrun.FormatTime(247.329), () => Is.EqualTo("4:07.32"));
         }
+
+        private static int rankFor(double pp) => LocalPriorityPolicy.EstimateGlobalRank("osu", pp)!.Value;
+
+        private static double ppFor(int rank) => LocalPriorityPolicy.EstimatePPForRank("osu", rank)!.Value;
     }
 }
