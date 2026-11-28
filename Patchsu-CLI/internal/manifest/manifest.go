@@ -15,6 +15,7 @@ type Manifest struct {
 	Release   string   `json:"release"`
 	MinCLI    string   `json:"minCli,omitempty"`
 	OsuCommit string   `json:"osuCommit"`
+	OsuBase   string   `json:"osuBase,omitempty"` // closest osu! release before OsuCommit + commits since, e.g. "2026.1117.0+6"
 	OsuRepo   string   `json:"osuRepo,omitempty"` // defaults to https://github.com/ppy/osu
 	DotnetSDK string   `json:"dotnetSdk"`         // major.minor channel, e.g. "10.0"
 	Patches   []Patch  `json:"patches"`

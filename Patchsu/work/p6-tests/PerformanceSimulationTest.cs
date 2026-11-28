@@ -159,7 +159,7 @@ namespace osu.Game.Rulesets.Osu.Tests
             TestContext.WriteLine($"acc={sim.Accuracy} 300={sim.Get(HitResult.Great)} 100={sim.Get(HitResult.Ok)} 50={sim.Get(HitResult.Meh)}");
             Assert.That(sim.Accuracy, Is.EqualTo(0.95).Within(0.005));
             Assert.That(sim.Get(HitResult.Miss), Is.EqualTo(2));
-            Assert.That(sim.Get(HitResult.Meh), Is.EqualTo(0));
+            Assert.That(sim.Get(HitResult.Meh), Is.LessThanOrEqualTo(3));
             Assert.That(sim.Combo, Is.EqualTo(sim.MaximumCombo - 2));
 
             sim.SetAccuracy(0.2);
@@ -182,9 +182,52 @@ namespace osu.Game.Rulesets.Osu.Tests
             Assert.That(sim.Get(HitResult.Miss), Is.EqualTo(1));
             Assert.That(sim.Combo, Is.EqualTo(combo));
 
+            // out of reach even without misses: every miss goes.
             sim.SetPerformance(100000);
             Assert.That(sim.Get(HitResult.Ok), Is.EqualTo(0));
-            Assert.That(sim.Get(HitResult.Great), Is.EqualTo(sim.BasicTotal - 1));
+            Assert.That(sim.Get(HitResult.Miss), Is.EqualTo(0));
+            Assert.That(sim.Get(HitResult.Great), Is.EqualTo(sim.BasicTotal));
+            Assert.That(sim.Combo, Is.EqualTo(sim.MaximumCombo));
+        }
+
+        [Test]
+        public void TestTargetRemovesFewestMisses()
+        {
+            double full = sim.Performance!.Value;
+            sim.SetCount(HitResult.Miss, 20);
+            sim.SetCombo(sim.ComboCap / 3);
+            double withMisses = sim.Performance!.Value;
+            double target = withMisses + (full - withMisses) / 3;
+
+            sim.SetPerformance(target);
+            int misses = sim.Get(HitResult.Miss);
+            TestContext.WriteLine($"full={full} start={withMisses} target={target} pp={sim.Performance} miss={misses} 300={sim.Get(HitResult.Great)} 100={sim.Get(HitResult.Ok)} 50={sim.Get(HitResult.Meh)} combo={sim.Combo}");
+            Assert.That(misses, Is.InRange(1, 19));
+            Assert.That(sim.Performance, Is.EqualTo(target).Within(target * 0.03 + 1));
+
+            // one more miss can't reach the target any more.
+            sim.SetCount(HitResult.Miss, misses + 1);
+            sim.SetCount(HitResult.Ok, 0);
+            sim.SetCount(HitResult.Meh, 0);
+            Assert.That(sim.Performance, Is.LessThan(target));
+
+            // reachable with the misses: they stay.
+            sim.SetPerformance(sim.Performance!.Value * 0.8);
+            Assert.That(sim.Get(HitResult.Miss), Is.EqualTo(misses + 1));
+        }
+
+        [Test]
+        public void TestAccuracyMixesOksAndMehs()
+        {
+            // steps of 50 points: 100s alone are 4 steps apart, the mix gets within one step (every step from 12 on can be made).
+            for (int i = 12; i <= 40; i++)
+            {
+                double target = 1 - i * 50.0 / 300 / sim.BasicTotal;
+                sim.SetAccuracy(target);
+                Assert.That(sim.Accuracy, Is.EqualTo(target).Within(50.0 / 300 / sim.BasicTotal), $"step {i}");
+                Assert.That(sim.Get(HitResult.Meh), Is.LessThanOrEqualTo(3));
+                Assert.That(sim.Get(HitResult.Great) + sim.Get(HitResult.Ok) + sim.Get(HitResult.Meh), Is.EqualTo(sim.BasicTotal));
+            }
         }
 
         [Test]

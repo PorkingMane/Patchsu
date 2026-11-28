@@ -30,8 +30,10 @@ Rules (everything updates on every keystroke):
   a lower combo stays. A typed combo above the limit is clamped right away. Exception: once an edit leaves no misses
   and no missed slider ticks, the combo jumps to the limit (max combo minus dropped slider ends), so fixing a choke
   is a single edit (setting misses to 0).
-- Typing accuracy or PP keeps misses, ticks, ends and combo and turns 300s into 100s (then, if 100s alone can't go
-  low enough, 100s into 50s) until the value is as close as it can get. The typed text stays while you type; the box
+- Typing accuracy or PP keeps ticks and ends and turns 300s into a mix of 100s and 50s (as few 50s as possible, which
+  fits 4x finer than 100s alone) until the value is as close as it can get. Misses and combo stay, unless the value
+  can't be reached with those misses: then the fewest misses that reach it become 300s (combo follows as when typing
+  the miss count). The typed text stays while you type; the box
   shows the real value once you leave it (Enter / click away / Tab). Tab and Shift+Tab move between boxes;
   Tab with nothing selected starts at accuracy (Shift+Tab at the last box).
 
@@ -673,10 +675,10 @@ index 0000000000..36293b47ae
 +}
 diff --git a/osu.Game/Screens/Ranking/Simulation/PerformanceSimulation.cs b/osu.Game/Screens/Ranking/Simulation/PerformanceSimulation.cs
 new file mode 100644
-index 0000000000..f5580b2ba9
+index 0000000000..7108fa5868
 --- /dev/null
 +++ b/osu.Game/Screens/Ranking/Simulation/PerformanceSimulation.cs
-@@ -0,0 +1,568 @@
+@@ -0,0 +1,628 @@
 +// Added by Patchsu
 +
 +using System;
@@ -703,8 +705,9 @@ index 0000000000..f5580b2ba9
 +    /// <item>Every missed slider tick lowers the highest possible combo by 2, every missed slider end by 1.</item>
 +    /// <item>Once a change leaves no misses and no missed slider ticks, the combo becomes the highest possible
 +    /// (the max combo minus the dropped slider ends), so fixing a choke is one edit.</item>
-+    /// <item>Typing an accuracy or a PP value keeps misses, slider ticks, slider ends and combo, and turns 300s into 100s
-+    /// (and, if 100s alone can't go low enough, 100s into 50s) until the value is reached.</item>
++    /// <item>Typing an accuracy or a PP value keeps slider ticks and slider ends and turns 300s into a mix of 100s and 50s
++    /// (as few 50s as possible) until the value is reached. Misses and combo stay, unless the value can't be reached with
++    /// those misses: then the fewest misses that reach it become 300s.</item>
 +    /// </list>
 +    /// </remarks>
 +    public class PerformanceSimulation
@@ -883,7 +886,7 @@ index 0000000000..f5580b2ba9
 +        }
 +
 +        /// <summary>
-+        /// Moves 300s / 100s / 50s until the accuracy is as close as possible to <paramref name="accuracy"/> (0..1).
++        /// Moves 300s / 100s / 50s (and removes misses if needed) until the accuracy is as close as possible to <paramref name="accuracy"/> (0..1).
 +        /// </summary>
 +        public void SetAccuracy(double accuracy)
 +        {
@@ -892,7 +895,7 @@ index 0000000000..f5580b2ba9
 +        }
 +
 +        /// <summary>
-+        /// Moves 300s / 100s / 50s until the PP is as close as possible to <paramref name="performance"/>.
++        /// Moves 300s / 100s / 50s (and removes misses if needed) until the PP is as close as possible to <paramref name="performance"/>.
 +        /// </summary>
 +        public void SetPerformance(double performance)
 +        {
@@ -1050,12 +1053,14 @@ index 0000000000..f5580b2ba9
 +        }
 +
 +        /// <summary>
-+        /// Keeps misses, ticks, slider ends and combo, and finds the split of the remaining judgements into 300s / 100s / 50s
++        /// Keeps slider ticks and slider ends, and finds the split of the judgements into 300s / 100s / 50s
 +        /// whose <paramref name="metric"/> is closest to <paramref name="target"/>.
++        /// Misses stay, unless the target can't be reached with them: then the fewest misses that reach it become 300s
++        /// (and the combo follows like after typing the miss count).
 +        /// </summary>
 +        /// <remarks>
-+        /// Step k (0..2n, n = judgements that aren't misses): k ≤ n gives k 100s, k &gt; n gives no 300s and k - n 50s (the rest 100s).
-+        /// The metric only goes down as k goes up, so a binary search finds it.
++        /// The 300s are lowered in steps of 50 points ("loss" L: a 100 costs 4, a 50 costs 5), using as few 50s as possible,
++        /// which mixes 100s and 50s for a finer fit than 100s alone. The metric only goes down as L goes up, so a binary search finds it.
 +        /// </remarks>
 +        private void distribute(Func<double> metric, double target)
 +        {
@@ -1065,49 +1070,82 @@ index 0000000000..f5580b2ba9
 +            // the real-score slider break guess of stable scores doesn't apply to changed judgements.
 +            Score.LegacyTotalScore = null;
 +
-+            int misses = BasicResults.Where(r => !r.IsHit()).Sum(Get);
-+            int n = Math.Max(0, BasicTotal - misses);
-+            int maxStep = secondResult == default ? 0 : thirdResult == default ? n : 2 * n;
++            bool hasMiss = BasicResults.Contains(HitResult.Miss);
++            int misses = hasMiss ? Get(HitResult.Miss) : 0;
++            int combo = Score.MaxCombo;
++            bool comboAtCap = combo >= ComboCap;
 +
-+            double valueAt(int k)
++            double valueAt(int missCount, int loss)
 +            {
-+                applyStep(k, n);
++                applyStep(missCount, loss, combo, comboAtCap);
 +                Score.Accuracy = computeAccuracy();
 +                return metric();
 +            }
 +
++            if (misses > 0 && valueAt(misses, 0) < target)
++            {
++                // fewest removed misses (largest miss count) that reach the target.
++                int lo = 0, hi = misses; // valueAt(hi) < target; lo reaches it, or nothing does.
++
++                if (valueAt(0, 0) >= target)
++                {
++                    while (hi - lo > 1)
++                    {
++                        int mid = (lo + hi) / 2;
++
++                        if (valueAt(mid, 0) >= target)
++                            lo = mid;
++                        else
++                            hi = mid;
++                    }
++                }
++
++                misses = lo;
++            }
++
++            int n = BasicTotal - misses;
++            int maxLoss = secondResult == default ? 0 : thirdResult == default ? n : 5 * n;
++
 +            int step;
 +
-+            if (valueAt(0) <= target)
++            if (valueAt(misses, 0) <= target)
 +                step = 0;
-+            else if (valueAt(maxStep) >= target)
-+                step = maxStep;
++            else if (valueAt(misses, maxLoss) >= target)
++                step = maxLoss;
 +            else
 +            {
-+                // smallest k with value <= target.
-+                int lo = 0, hi = maxStep;
++                // smallest L with value <= target.
++                int lo = 0, hi = maxLoss;
 +
 +                while (hi - lo > 1)
 +                {
 +                    int mid = (lo + hi) / 2;
 +
-+                    if (valueAt(mid) <= target)
++                    if (valueAt(misses, mid) <= target)
 +                        hi = mid;
 +                    else
 +                        lo = mid;
 +                }
 +
-+                step = Math.Abs(valueAt(lo) - target) <= Math.Abs(valueAt(hi) - target) ? lo : hi;
++                step = Math.Abs(valueAt(misses, lo) - target) <= Math.Abs(valueAt(misses, hi) - target) ? lo : hi;
 +            }
 +
-+            applyStep(step, n);
++            applyStep(misses, step, combo, comboAtCap);
 +            recalculate();
 +        }
 +
-+        private void applyStep(int k, int n)
++        private void applyStep(int misses, int loss, int combo, bool comboAtCap)
 +        {
-+            int ok = k <= n ? k : 2 * n - k;
-+            int meh = k <= n ? 0 : k - n;
++            if (BasicResults.Contains(HitResult.Miss))
++                Score.Statistics[HitResult.Miss] = misses;
++
++            int n = BasicTotal - misses;
++            int ok, meh = 0;
++
++            if (thirdResult == default)
++                ok = loss;
++            else
++                (ok, meh) = splitLoss(loss, n);
 +
 +            Score.Statistics[topResult] = n - ok - meh;
 +
@@ -1116,6 +1154,30 @@ index 0000000000..f5580b2ba9
 +
 +            if (thirdResult != default)
 +                Score.Statistics[thirdResult] = meh;
++
++            int cap = ComboCap;
++            Score.MaxCombo = comboAtCap || HasNoComboBreaks ? cap : Math.Min(combo, cap);
++        }
++
++        /// <summary>
++        /// 100s (4 each) and 50s (5 each) that lose exactly <paramref name="loss"/> × 50 points with the fewest 50s,
++        /// or the closest lower loss that can be made. Never more than <paramref name="n"/> judgements.
++        /// </summary>
++        private static (int ok, int meh) splitLoss(int loss, int n)
++        {
++            for (; loss > 0; loss--)
++            {
++                int meh = loss % 4;
++
++                // too many 100s for the judgements left: every 4 more 50s replace 5 100s.
++                if (meh < loss - 4 * n)
++                    meh = loss - 4 * n;
++
++                if (5 * meh <= loss)
++                    return ((loss - 5 * meh) / 4, meh);
++            }
++
++            return (0, 0);
 +        }
 +
 +        private void recalculate(bool notify = true)

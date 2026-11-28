@@ -9,22 +9,31 @@ built into it.
 
 Run `Patchsu-CLI` (or `Patchsu-CLI.exe`) in a terminal:
 
-1. **Pick patches.** The preset row is at the top (tab or ←/→ to switch); toggle single patches with space.
+1. **Pick patches.** The preset row is at the top (tab or ←/→ to switch); toggle single patches with space (or `x`).
+   `a` selects every patch, `n` clears the selection, enter goes on. The last selection is remembered.
+   - 0001 is required and always on.
    - A grayed-out patch needs others that aren't selected. Selecting it selects them too (`Also enabled N: ...`).
    - Deselecting a patch also deselects the patches that need it (`Also disabled N: ...`).
    - Meanwhile the CLI quietly checks your system. The line under the list shows what's there and how much space the build needs, which is less once the SDK, NuGet packages or an earlier build exist.
-2. **Choose the data folder** (first run only): next to the program or in Documents. Downloads and build files go there (about 3–4 GB).
+2. **Choose the data folder** (first run only, see below). Downloads and build files go there (about 3–4 GB).
 3. **Check.** The CLI looks for the .NET SDK, git, the osu! source and the patches. If something is missing, it lists exactly what it will download or run and asks first.
-4. **Build.** Patches are applied, the game is built and installed, and a menu entry / Start Menu shortcut / `.app` is created.
+   `r` checks again, `i` changes the install location, `f` the data folder, esc goes back to the patches.
+4. **Build.** Patches are applied, the game is built and installed, and a menu entry / Start Menu shortcut / `.app` is created. `l` shows the build log.
+5. **Done.** Enter starts the game, `d` deletes the data folder, `q` quits.
 
 ### Presets
 
 | Preset | Patches | Builds |
 |---|---|---|
 | Vanilla+ | 0001, 0003, 0003b, 0005, 0006, 0007, 0010 | Patchsu |
-| Local play | every patch | Patchsu |
+| Patchsu | every patch | Patchsu |
 
 Presets come with the patches (`patches.meta.json`), so they change with them.
+
+**Custom servers.** A manifest can list custom osu! servers (`servers`) with the patches that connect the game to
+them. Those patches are hidden from the list and only come with a server preset (`"server": true`); `s` picks the
+server and the game is built as `Patchsu-<Server>`, installed next to Patchsu. No server is published yet, so no
+server preset is shown.
 
 ### Data folder and install location
 
@@ -54,6 +63,7 @@ something other than a Patchsu build, can't be chosen. The menu entry and your o
 | osu! source | `patchsu-data/osu-lazer` | Shallow download of the one commit the patches are made for (~25 MB). |
 | NuGet packages | `patchsu-data/nuget` | Kept out of `~/.nuget`. |
 | The game | Linux `~/.local/share/patchsu-app`, Windows `%LOCALAPPDATA%\patchsu-app`, macOS `~/Applications/Patchsu.app` | Shares the official osu! data folder (beatmaps, skins, scores). |
+| Build info | `patchsu-build.json` in the game folder | Patches, preset, patch source, osu! commit and base version, CLI version. The game shows the osu! base version in its settings footer and links to the osu! source tree. |
 
 The game gets the Patchsu logo: as the `.exe` icon and window icon (it replaces osu!'s `lazer.ico` before the build), the
 Linux menu icon and the macOS app icon.
@@ -65,24 +75,27 @@ After a successful build, the final screen offers to delete `patchsu-data`. The 
 ```
 Patchsu-CLI                                   interactive
 Patchsu-CLI build --preset "Vanilla+" --yes
-Patchsu-CLI build --patches 0003,0009 --yes   # 0009 pulls in 0002
-Patchsu-CLI list                              # patches, needs, presets
+Patchsu-CLI build --patches 0003,0009 --yes   # what they need is added
+Patchsu-CLI list                              # patches, needs, presets, custom servers
 Patchsu-CLI check                             # exit code 1 if something is missing
-Patchsu-CLI uninstall                         # game + launcher; osu! data is untouched
+Patchsu-CLI uninstall [--server NAME]         # game + launcher; osu! data is untouched
+Patchsu-CLI --version
 ```
 
-Flags: `--release TAG` (patches from a GitHub release instead of the built-in ones; `latest` = the newest),
-`--local DIR` (local patches folder), `--data-dir DIR`, `--prefix DIR` (install into exactly this folder; see Install location), `--no-launcher`,
-`--no-update` (stay on the built-in patches).
+Flags: `--release TAG` (patches from a GitHub release instead of the built-in ones; `latest` = the newest release,
+`main` = the patches on the repo's main branch), `--local DIR` (local patches folder), `--server NAME` (the server for a
+server preset), `--data-dir DIR`, `--prefix DIR` (install into exactly this folder; see Install location),
+`--no-launcher`, `--no-update` (stay on the built-in patches), `--yes`/`-y` (approve downloads without asking).
 
 Where the patches come from, first match wins: `--local DIR`, `--release TAG`, a `patches/` folder next to the program,
 the patches built into the program, the newest GitHub release (only for a CLI built without patches).
 
-**Patch updates.** Before using the built-in patches, the CLI asks GitHub (for up to 8 seconds) for the newest patch
-release. If it came out after the built-in patches were last changed and its patches or presets differ, the
-CLI uses it instead and says so on the first screen; the patches are downloaded with the build. So a new patch release
-reaches users without a new Patchsu-CLI download. A release that needs a newer CLI (`minCli`) is skipped with a note.
-Offline, the built-in patches are used without a fuss. `--no-update` skips the check. The time the built-in patches
+**Patch updates.** Before using the built-in patches, the CLI asks GitHub (for up to 8 seconds) for newer ones: first
+the `Patchsu/patches` folder on the repo's main branch (via the commit feed and raw files, so GitHub's API limit
+rarely matters), and if that can't be read, the newest patch release. If they changed after the built-in patches and
+their patches, presets or servers differ, the CLI uses them instead and says so on the first screen; the patches are
+downloaded with the build. So a patch fix pushed to the repo reaches users without a new Patchsu-CLI download. Patches
+that need a newer CLI (`minCli`) are skipped with a note. Offline, the built-in patches are used without a fuss. `--no-update` skips the check. The time the built-in patches
 last changed is written by `go generate` (`internal/bundle/patches/bundled-at`: the last commit touching
 `Patchsu/patches`, or the current time when they have uncommitted changes).
 
@@ -90,7 +103,7 @@ last changed is written by `go generate` (`internal/bundle/patches/bundled-at`: 
 
 Patch releases on [github.com/PorkingMane/Patchsu](https://github.com/PorkingMane/Patchsu) carry two assets:
 
-- `manifest.json`: osu! commit, .NET channel, patches (id, file, name, description, needs, SHA-256) and presets.
+- `manifest.json`: osu! commit and base version, .NET channel, patches (id, file, name, description, needs, SHA-256) and presets.
 - `patches.zip`: the `.patch` files.
 
 Both are generated from the patches folder and its hand-edited `patches.meta.json`:
@@ -99,11 +112,12 @@ Both are generated from the patches folder and its hand-edited `patches.meta.jso
 Patchsu-CLI make-release --local ../Patchsu/patches --tag v26 --out dist/
 ```
 
-The CLI takes the newest release whose tag doesn't start with `cli-` (CLI releases are tagged `cli-v1.1.0`). To try patches without publishing, use `--local DIR`. The CLI then reads `patches.meta.json` directly and computes the hashes itself.
+The CLI takes the newest release whose tag doesn't start with `cli-` (CLI releases are tagged like `cli-v1.1.0`). To try patches without publishing, use `--local DIR`. The CLI then reads `patches.meta.json` directly and computes the hashes itself.
 
 A `patches/` folder next to the program (with `manifest.json` or `patches.meta.json`) is used automatically, as if `--local` was given. `./install-dev.sh` builds the CLI into `Patchsu-CLI/Patchsu-CLI`; that build also finds `../Patchsu/patches` on its own, so `./Patchsu-CLI` in this folder builds from your working patches.
 
-The manifest is validated on load: unknown ids in `needs` or presets, loops, and duplicate ids are errors.
+The manifest is validated on load: unknown ids in `needs` or presets, loops, duplicate ids, and ordinary patches or
+presets that need a server's patches are errors.
 
 ## Building the CLI
 
@@ -120,6 +134,10 @@ Upload every file in `dist/` to the release. Release notes for users:
 - macOS: `darwin-arm64` for Apple Silicon, `darwin-amd64` for Intel. The binary isn't notarized, so once:
   `chmod +x Patchsu-CLI-darwin-arm64 && xattr -d com.apple.quarantine Patchsu-CLI-darwin-arm64`, then `./Patchsu-CLI-darwin-arm64`.
 - Linux: `chmod +x Patchsu-CLI-linux-amd64 && ./Patchsu-CLI-linux-amd64`.
+
+`install-dev.sh` and `build-release.sh` run `go generate` themselves. Local finishing patches
+(`Patchsu/work/rebrand/*.patch`, not in the repo) are copied into `internal/bundle/patches/finish` too and applied after
+the selected patches on every build; one that doesn't apply is left out.
 
 Without `go generate` the binary has no built-in patches and looks for a GitHub release instead. The patch copies in
 `internal/bundle/patches` aren't committed; the logo copies in `internal/bundle/logo` are.

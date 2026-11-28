@@ -1,8 +1,18 @@
 Changelog go in patch numerical order, so 0001 will be first and 1000 will be last unless its a breaking change.
 
-#### 28 November · 2 changes
+#### 28 November · 9 changes
+- Debug section now shows the Patchsu version, as well as what it was built on with exact tree it uses (0001)
+- Fixed mods not toggle each other when they are incompatable via adding a hook for it. (0001)
 - Added Best Performance numbering whenever you open more than 5 best scores (0002)
+- Fixed Local Profiles not reopening at the very top, remembering their last scroll position (0002)
+- Fixed PP calculation not being user friendly when you enter PP value that is higher than possible with current misses. Now also adjust misses to your desired PP value (0008)
+- PP calculation now uses 50s when can't reach desired accuracy with 100s only for better accuracy in general (0008)
 - Fixed Random V2 acronym not syncing with new one (RDV2 > V2) (0500)
+- Fixed ALL old acronyms not syncing with new ones via previous alias (0500)
+
+- Changed osu! cookie and entering phrase on Patchsu specifically^ (not a patch change, hardcoded)
+
+^ - This was done for 2 reasons, 1 is to be compliant and re-distribute actual .exe files without reusing osu! main asset (will be taken down on first notice from 'ppy Pty Ltd' and return to basic CLI tool only); 2 is that end-user/viewer can see that this is NOT official osu! client, but rather a practicing one with custom features/mods, because it was confusing.
 
 #### 27.5 November · 13 changes
 - Added tooltip color handles allowing more variety. This differs from original osu!lazer, but this is change is as minimal as possible (0001)

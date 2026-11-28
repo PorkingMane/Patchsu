@@ -1,0 +1,1177 @@
+Patchsu patch 2b (optional, very early test): P2P multiplayer lobby, LAN only for now.
+
+Needs 0002 (applies to plain osu!lazer 8cb6e6e68d + 0001 + 0002).
+
+- Main menu -> Play -> "multi" opens Multiplayer · P2P (0001 removed the online multiplayer buttons).
+- Entering the screen opens a lobby on this machine (TCP port 13381). "Create Code" shows its 8 symbol code
+  (XXXX-XXXX, the machine's local IPv4 address with a checksum) and copies it; "Connect via Code" joins someone else's lobby.
+- Everyone else in the lobby floats around your own avatar, moving like the avatars in ranked play's queue.
+  Local profiles send their profile picture (at most 512 KB); online accounts show their osu! avatar.
+- No gameplay yet: this only tests connecting. Both players have to be on the same network (or VPN).
+- No new dependencies (plain .NET sockets, Newtonsoft.Json from osu!).
+
+diff --git a/osu.Game/Online/P2P/P2PLobby.cs b/osu.Game/Online/P2P/P2PLobby.cs
+new file mode 100644
+index 0000000000..75fb68a90e
+--- /dev/null
++++ b/osu.Game/Online/P2P/P2PLobby.cs
+@@ -0,0 +1,433 @@
++using System;
++using System.Buffers.Binary;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Net;
++using System.Net.NetworkInformation;
++using System.Net.Sockets;
++using System.Text;
++using System.Threading;
++using System.Threading.Tasks;
++using Newtonsoft.Json;
++
++namespace osu.Game.Online.P2P
++{
++    /// <summary>
++    /// A member of a P2P lobby.
++    /// </summary>
++    public class P2PPeer
++    {
++        /// <summary>
++        /// Given by the host when joining (the host itself is 0).
++        /// </summary>
++        [JsonProperty("id")]
++        public int Id;
++
++        [JsonProperty("username")]
++        public string Username = string.Empty;
++
++        /// <summary>
++        /// The osu! user ID (local profiles have negative IDs).
++        /// </summary>
++        [JsonProperty("user_id")]
++        public int UserId;
++
++        /// <summary>
++        /// A local profile's picture file (at most <see cref="P2PLobby.MAX_AVATAR_SIZE"/> bytes), or null.
++        /// </summary>
++        [JsonProperty("avatar")]
++        public byte[]? Avatar;
++    }
++
++    /// <summary>
++    /// Patchsu: a LAN-only P2P lobby. The host listens on <see cref="PORT"/>; guests join with an 8 symbol code made from the host's local IPv4 address.
++    /// Messages are a 4 byte length followed by JSON.
++    /// </summary>
++    public class P2PLobby : IDisposable
++    {
++        public const int PORT = 13381;
++        public const int MAX_AVATAR_SIZE = 512 * 1024;
++
++        private const int protocol_version = 1;
++        private const int max_message_size = 4 * 1024 * 1024;
++
++        /// <summary>
++        /// The other members of the lobby changed. Invoked on a background thread.
++        /// </summary>
++        public event Action<P2PPeer[]>? PeersChanged;
++
++        /// <summary>
++        /// A guest lost the connection to its host. Invoked on a background thread.
++        /// </summary>
++        public event Action? Disconnected;
++
++        public bool IsHost => listener != null;
++
++        private readonly P2PPeer self;
++        private readonly CancellationTokenSource cancellation = new CancellationTokenSource();
++
++        private TcpListener? listener;
++        private readonly List<Guest> guests = new List<Guest>();
++        private int lastGuestId;
++
++        private TcpClient? host;
++
++        private P2PLobby(P2PPeer self)
++        {
++            this.self = self;
++        }
++
++        /// <summary>
++        /// Opens a lobby on this machine.
++        /// </summary>
++        /// <exception cref="SocketException">The port is already in use.</exception>
++        public static P2PLobby Host(P2PPeer self)
++        {
++            var lobby = new P2PLobby(self);
++
++            lobby.listener = new TcpListener(IPAddress.Any, PORT);
++            lobby.listener.Start();
++            _ = lobby.acceptGuests();
++
++            return lobby;
++        }
++
++        /// <summary>
++        /// Joins the lobby a code points to.
++        /// </summary>
++        public static async Task<P2PLobby> JoinAsync(string code, P2PPeer self)
++        {
++            if (!TryDecodeCode(code, out var address))
++                throw new ArgumentException("This code is not valid.");
++
++            var lobby = new P2PLobby(self);
++            var client = lobby.host = new TcpClient { NoDelay = true, SendTimeout = 5000 };
++
++            try
++            {
++                using (var timeout = new CancellationTokenSource(5000))
++                    await client.ConnectAsync(address, PORT, timeout.Token).ConfigureAwait(false);
++
++                send(client.GetStream(), new Message { Type = @"hello", Version = protocol_version, Peer = self });
++            }
++            catch
++            {
++                lobby.Dispose();
++                throw;
++            }
++
++            _ = lobby.readHost(client);
++            return lobby;
++        }
++
++        private async Task acceptGuests()
++        {
++            try
++            {
++                while (true)
++                    _ = handleGuest(await listener!.AcceptTcpClientAsync(cancellation.Token).ConfigureAwait(false));
++            }
++            catch
++            {
++                // Lobby closed.
++            }
++        }
++
++        private async Task handleGuest(TcpClient client)
++        {
++            Guest? guest = null;
++
++            try
++            {
++                client.NoDelay = true;
++                client.SendTimeout = 5000;
++
++                var stream = client.GetStream();
++
++                Message? hello;
++
++                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token))
++                {
++                    timeout.CancelAfter(10000);
++                    hello = await receive(stream, timeout.Token).ConfigureAwait(false);
++                }
++
++                if (hello?.Type != @"hello" || hello.Version != protocol_version || hello.Peer == null)
++                    return;
++
++                hello.Peer.Id = Interlocked.Increment(ref lastGuestId);
++                if (hello.Peer.Avatar?.Length > MAX_AVATAR_SIZE)
++                    hello.Peer.Avatar = null;
++
++                guest = new Guest(client, hello.Peer);
++
++                lock (guests)
++                    guests.Add(guest);
++
++                broadcastPeers();
++
++                // Nothing else is sent by guests yet; reading only notices when they leave.
++                while (true)
++                    await receive(stream, cancellation.Token).ConfigureAwait(false);
++            }
++            catch
++            {
++                // Guest left.
++            }
++            finally
++            {
++                client.Dispose();
++
++                bool removed;
++
++                lock (guests)
++                    removed = guest != null && guests.Remove(guest);
++
++                if (removed && !cancellation.IsCancellationRequested)
++                    broadcastPeers();
++            }
++        }
++
++        private void broadcastPeers()
++        {
++            lock (guests)
++            {
++                foreach (var guest in guests)
++                {
++                    var others = guests.Where(g => g != guest).Select(g => g.Peer).Prepend(self).ToArray();
++
++                    try
++                    {
++                        send(guest.Client.GetStream(), new Message { Type = @"peers", Peers = others });
++                    }
++                    catch
++                    {
++                        // Its read loop removes it.
++                        guest.Client.Dispose();
++                    }
++                }
++
++                PeersChanged?.Invoke(guests.Select(g => g.Peer).ToArray());
++            }
++        }
++
++        private async Task readHost(TcpClient client)
++        {
++            try
++            {
++                var stream = client.GetStream();
++
++                while (true)
++                {
++                    var message = await receive(stream, cancellation.Token).ConfigureAwait(false);
++
++                    if (message?.Type == @"peers" && message.Peers != null)
++                        PeersChanged?.Invoke(message.Peers);
++                }
++            }
++            catch
++            {
++                if (!cancellation.IsCancellationRequested)
++                    Disconnected?.Invoke();
++            }
++        }
++
++        private static void send(Stream stream, Message message)
++        {
++            byte[] json = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(message));
++            byte[] frame = new byte[4 + json.Length];
++
++            BinaryPrimitives.WriteInt32LittleEndian(frame, json.Length);
++            json.CopyTo(frame, 4);
++
++            lock (stream)
++                stream.Write(frame);
++        }
++
++        private static async Task<Message?> receive(Stream stream, CancellationToken cancellationToken)
++        {
++            byte[] length = new byte[4];
++            await stream.ReadExactlyAsync(length, cancellationToken).ConfigureAwait(false);
++
++            int size = BinaryPrimitives.ReadInt32LittleEndian(length);
++            if (size <= 0 || size > max_message_size)
++                throw new InvalidDataException();
++
++            byte[] json = new byte[size];
++            await stream.ReadExactlyAsync(json, cancellationToken).ConfigureAwait(false);
++
++            return JsonConvert.DeserializeObject<Message>(Encoding.UTF8.GetString(json));
++        }
++
++        public void Dispose()
++        {
++            if (cancellation.IsCancellationRequested)
++                return;
++
++            PeersChanged = null;
++            Disconnected = null;
++
++            cancellation.Cancel();
++            listener?.Stop();
++            host?.Dispose();
++
++            lock (guests)
++            {
++                foreach (var guest in guests)
++                    guest.Client.Dispose();
++            }
++        }
++
++        #region Codes
++
++        // Crockford's base32: no I, L, O or U.
++        private const string code_alphabet = @"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
++
++        /// <summary>
++        /// This machine's code ("XXXX-XXXX"), or null when it has no network.
++        /// </summary>
++        public static string? CreateCode()
++        {
++            var address = findLanAddress();
++            return address == null ? null : EncodeCode(address);
++        }
++
++        /// <summary>
++        /// The code ("XXXX-XXXX") of an IPv4 address.
++        /// </summary>
++        public static string EncodeCode(IPAddress address)
++        {
++            uint value = BinaryPrimitives.ReadUInt32BigEndian(address.GetAddressBytes());
++            int[] digits = new int[8];
++
++            for (int i = 6; i >= 0; i--)
++            {
++                digits[i] = (int)(value & 31);
++                value >>= 5;
++            }
++
++            digits[7] = checksum(digits);
++
++            var code = new StringBuilder(9);
++
++            for (int i = 0; i < 8; i++)
++            {
++                if (i == 4)
++                    code.Append('-');
++                code.Append(code_alphabet[digits[i]]);
++            }
++
++            return code.ToString();
++        }
++
++        public static bool TryDecodeCode(string code, out IPAddress address)
++        {
++            address = IPAddress.None;
++
++            var digits = new List<int>(8);
++
++            foreach (char c in code.ToUpperInvariant())
++            {
++                if (c == '-' || char.IsWhiteSpace(c))
++                    continue;
++
++                int digit = code_alphabet.IndexOf(c switch
++                {
++                    'O' => '0',
++                    'I' or 'L' => '1',
++                    _ => c
++                });
++
++                if (digit < 0)
++                    return false;
++
++                digits.Add(digit);
++            }
++
++            if (digits.Count != 8 || checksum(digits) != digits[7])
++                return false;
++
++            ulong value = 0;
++            for (int i = 0; i < 7; i++)
++                value = (value << 5) | (uint)digits[i];
++
++            if (value > uint.MaxValue)
++                return false;
++
++            byte[] bytes = new byte[4];
++            BinaryPrimitives.WriteUInt32BigEndian(bytes, (uint)value);
++            address = new IPAddress(bytes);
++            return true;
++        }
++
++        private static int checksum(IReadOnlyList<int> digits)
++        {
++            int sum = 0;
++            for (int i = 0; i < 7; i++)
++                sum += digits[i] * (i + 1);
++            return sum % 32;
++        }
++
++        /// <summary>
++        /// The IPv4 address of the network adapter with a default gateway (the one connected to the router), preferring private addresses.
++        /// </summary>
++        private static IPAddress? findLanAddress()
++        {
++            try
++            {
++                return NetworkInterface.GetAllNetworkInterfaces()
++                                       .Where(n => n.OperationalStatus == OperationalStatus.Up
++                                                   && n.NetworkInterfaceType != NetworkInterfaceType.Loopback
++                                                   && n.NetworkInterfaceType != NetworkInterfaceType.Tunnel)
++                                       .Select(n => n.GetIPProperties())
++                                       .SelectMany(p => p.UnicastAddresses
++                                                         .Where(a => a.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(a.Address))
++                                                         .Select(a => (address: a.Address, hasGateway: p.GatewayAddresses.Any(g => g.Address.AddressFamily == AddressFamily.InterNetwork))))
++                                       .OrderByDescending(a => a.hasGateway)
++                                       .ThenByDescending(a => isPrivate(a.address))
++                                       .Select(a => a.address)
++                                       .FirstOrDefault();
++            }
++            catch
++            {
++                return null;
++            }
++        }
++
++        private static bool isPrivate(IPAddress address)
++        {
++            byte[] b = address.GetAddressBytes();
++            return b[0] == 10 || (b[0] == 172 && b[1] >= 16 && b[1] < 32) || (b[0] == 192 && b[1] == 168);
++        }
++
++        #endregion
++
++        private class Guest
++        {
++            public readonly TcpClient Client;
++            public readonly P2PPeer Peer;
++
++            public Guest(TcpClient client, P2PPeer peer)
++            {
++                Client = client;
++                Peer = peer;
++            }
++        }
++
++        private class Message
++        {
++            [JsonProperty("type")]
++            public string Type = string.Empty;
++
++            [JsonProperty("version")]
++            public int Version;
++
++            [JsonProperty("peer")]
++            public P2PPeer? Peer;
++
++            [JsonProperty("peers")]
++            public P2PPeer[]? Peers;
++        }
++    }
++}
+diff --git a/osu.Game/Screens/Menu/ButtonSystem.cs b/osu.Game/Screens/Menu/ButtonSystem.cs
+index 3f299228b1..a0107ed844 100644
+--- a/osu.Game/Screens/Menu/ButtonSystem.cs
++++ b/osu.Game/Screens/Menu/ButtonSystem.cs
+@@ -47,6 +47,7 @@ public partial class ButtonSystem : Container, IStateful<ButtonSystemState>, IKe
+         public Action? OnSolo;
+         public Action? OnSettings;
+         public Action? OnMultiplayer;
++        public Action? OnP2PMultiplayer;
+         public Action? OnQuickPlay;
+         public Action? OnRankedPlay;
+         public Action? OnPlaylists;
+@@ -154,6 +155,8 @@ private void load(AudioManager audio, IdleTracker? idleTracker, GameHost host)
+                 Padding = new MarginPadding { Left = WEDGE_WIDTH },
+             });
+             // Patched: multiplayer, ranked play, playlists and daily challenge are stripped.
++            // Patchsu: P2P multiplayer in their place.
++            buttonsPlay.Add(new MainMenuButton(ButtonSystemStrings.Multi, @"button-default-select", OsuIcon.Online, new Color4(94, 63, 186, 255), (_, _) => OnP2PMultiplayer?.Invoke(), Key.M));
+             buttonsPlay.ForEach(b => b.VisibleState = ButtonSystemState.Play);
+ 
+             buttonsMulti.Add(new MainMenuButton(ButtonSystemStrings.Lounge, @"button-default-select", FontAwesome.Solid.Couch, new Color4(94, 63, 186, 255), onMultiplayer, Key.L, Key.M)
+diff --git a/osu.Game/Screens/Menu/MainMenu.cs b/osu.Game/Screens/Menu/MainMenu.cs
+index 24d3d71292..d0c9885320 100644
+--- a/osu.Game/Screens/Menu/MainMenu.cs
++++ b/osu.Game/Screens/Menu/MainMenu.cs
+@@ -160,6 +160,7 @@ private void load(BeatmapListingOverlay beatmapListing, SettingsOverlay settings
+                             },
+                             OnSolo = loadSongSelect,
+                             OnMultiplayer = () => this.Push(new Multiplayer()),
++                            OnP2PMultiplayer = () => this.Push(new osu.Game.Screens.OnlinePlay.P2P.P2PScreen()),
+                             OnQuickPlay = loadQuickPlay,
+                             OnRankedPlay = loadRankedPlay,
+                             OnPlaylists = () => this.Push(new Playlists()),
+diff --git a/osu.Game/Screens/OnlinePlay/P2P/P2PFloatingAvatar.cs b/osu.Game/Screens/OnlinePlay/P2P/P2PFloatingAvatar.cs
+new file mode 100644
+index 0000000000..878ab2bedd
+--- /dev/null
++++ b/osu.Game/Screens/OnlinePlay/P2P/P2PFloatingAvatar.cs
+@@ -0,0 +1,168 @@
++using System;
++using System.IO;
++using osu.Framework.Allocation;
++using osu.Framework.Audio;
++using osu.Framework.Audio.Sample;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Containers;
++using osu.Framework.Graphics.Cursor;
++using osu.Framework.Graphics.Rendering;
++using osu.Framework.Graphics.Shapes;
++using osu.Framework.Graphics.Sprites;
++using osu.Framework.Graphics.Textures;
++using osu.Framework.Localisation;
++using osu.Framework.Utils;
++using osu.Game.Online.API.Requests.Responses;
++using osu.Game.Online.P2P;
++using osu.Game.Screens.OnlinePlay.Matchmaking.Match;
++using osu.Game.Users.Drawables;
++using osuTK;
++using osuTK.Graphics;
++using SixLabors.ImageSharp.PixelFormats;
++using Image = SixLabors.ImageSharp.Image;
++using ImageFormatException = SixLabors.ImageSharp.ImageFormatException;
++
++namespace osu.Game.Screens.OnlinePlay.P2P
++{
++    /// <summary>
++    /// A lobby member floating around the centre, moving like the avatars in ranked play's queue.
++    /// Shows the member's own local profile picture when it sent one.
++    /// </summary>
++    public partial class P2PFloatingAvatar : CompositeDrawable, IHasTooltip
++    {
++        private const float safe_radius = 0.2f;
++        private const int num_appear_samples = 6;
++
++        private readonly P2PPeer peer;
++
++        private Texture? texture;
++        private Sample? appearSample;
++
++        private float angle;
++        private float radius;
++        private float targetScale;
++        private float targetAlpha;
++
++        public LocalisableString TooltipText => peer.Username;
++
++        public P2PFloatingAvatar(P2PPeer peer)
++        {
++            this.peer = peer;
++
++            Size = MatchmakingAvatar.SIZE;
++            RelativePositionAxes = Axes.Both;
++            Anchor = Anchor.Centre;
++            Origin = Anchor.Centre;
++        }
++
++        [BackgroundDependencyLoader]
++        private void load(IRenderer renderer, AudioManager audio)
++        {
++            texture = createTexture(renderer, peer.Avatar);
++
++            InternalChild = new CircularContainer
++            {
++                RelativeSizeAxes = Axes.Both,
++                Masking = true,
++                Children = new Drawable[]
++                {
++                    new Box
++                    {
++                        RelativeSizeAxes = Axes.Both,
++                        Colour = Color4.LightSlateGray,
++                    },
++                    texture != null
++                        ? new Sprite
++                        {
++                            RelativeSizeAxes = Axes.Both,
++                            FillMode = FillMode.Fill,
++                            Anchor = Anchor.Centre,
++                            Origin = Anchor.Centre,
++                            Texture = texture,
++                        }
++                        // Online accounts show their osu! avatar; other local profiles (whose IDs mean nothing here) the guest one.
++                        : new UpdateableAvatar(new APIUser { Id = peer.UserId > 1 ? peer.UserId : 0, Username = peer.Username }, isInteractive: false)
++                        {
++                            RelativeSizeAxes = Axes.Both,
++                        },
++                }
++            };
++
++            appearSample = audio.Samples.Get($@"Multiplayer/Matchmaking/Cloud/appear-{RNG.Next(0, num_appear_samples)}");
++        }
++
++        private static Texture? createTexture(IRenderer renderer, byte[]? data)
++        {
++            if (data == null)
++                return null;
++
++            try
++            {
++                // Profile pictures are at most 256 px; refuse anything big before decoding it.
++                var info = Image.Identify(data);
++                if (info.Width > 1024 || info.Height > 1024)
++                    return null;
++
++                var upload = new TextureUpload(Image.Load<Rgba32>(data));
++                var result = renderer.CreateTexture(upload.Width, upload.Height);
++                result.SetData(upload);
++                return result;
++            }
++            catch (Exception e) when (e is ImageFormatException or InvalidDataException or NotSupportedException)
++            {
++                return null;
++            }
++        }
++
++        protected override void LoadComplete()
++        {
++            base.LoadComplete();
++
++            updateParams();
++
++            angle = RNG.NextSingle(0f, MathF.Tau);
++            radius = RNG.NextSingle(safe_radius, 0.5f);
++            Scale = new Vector2(targetScale);
++
++            Alpha = 0;
++            this.FadeTo(targetAlpha, 2000, Easing.OutQuint);
++
++            var channel = appearSample?.GetChannel();
++
++            if (channel != null)
++            {
++                channel.Frequency.Value = 0.5f + RNG.NextDouble(1.5f);
++                channel.Balance.Value = MathF.Cos(angle) * OsuGameBase.SFX_STEREO_STRENGTH;
++                channel.Play();
++            }
++        }
++
++        private void updateParams()
++        {
++            targetScale = RNG.NextSingle(1.5f, 3f);
++            targetAlpha = RNG.NextSingle(0.7f, 1f);
++
++            Scheduler.AddDelayed(updateParams, RNG.Next(500, 5000));
++        }
++
++        protected override void Update()
++        {
++            base.Update();
++
++            float elapsed = (float)Math.Min(20, Time.Elapsed) / 1000;
++
++            Scale = new Vector2((float)Interpolation.Lerp(Scale.X, targetScale, elapsed / 100));
++            Alpha = (float)Interpolation.Lerp(Alpha, targetAlpha, elapsed / 100);
++
++            angle += radius * elapsed * 0.5f;
++
++            Position = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * radius;
++        }
++
++        protected override void Dispose(bool isDisposing)
++        {
++            base.Dispose(isDisposing);
++            texture?.Dispose();
++        }
++    }
++}
+diff --git a/osu.Game/Screens/OnlinePlay/P2P/P2PScreen.cs b/osu.Game/Screens/OnlinePlay/P2P/P2PScreen.cs
+new file mode 100644
+index 0000000000..55ec4be3ee
+--- /dev/null
++++ b/osu.Game/Screens/OnlinePlay/P2P/P2PScreen.cs
+@@ -0,0 +1,513 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Net.Sockets;
++using osu.Framework.Allocation;
++using osu.Framework.Extensions;
++using osu.Framework.Graphics;
++using osu.Framework.Graphics.Containers;
++using osu.Framework.Graphics.Shapes;
++using osu.Framework.Graphics.Sprites;
++using osu.Framework.Logging;
++using osu.Framework.Platform;
++using osu.Framework.Screens;
++using osu.Game.Graphics;
++using osu.Game.Graphics.Backgrounds;
++using osu.Game.Graphics.Containers;
++using osu.Game.Graphics.Sprites;
++using osu.Game.Graphics.UserInterfaceV2;
++using osu.Game.LocalPriority;
++using osu.Game.Online.API;
++using osu.Game.Online.P2P;
++using osu.Game.Overlays;
++using osu.Game.Overlays.Notifications;
++using osu.Game.Screens.Backgrounds;
++using osu.Game.Screens.OnlinePlay.Matchmaking.Match;
++using osu.Game.Screens.Ranking;
++using osuTK;
++using osuTK.Graphics;
++
++namespace osu.Game.Screens.OnlinePlay.P2P
++{
++    /// <summary>
++    /// Patchsu: P2P multiplayer lobby (LAN test). Entering opens a lobby on this machine; its code lets others join.
++    /// Everyone else in the lobby floats around your own avatar.
++    /// </summary>
++    public partial class P2PScreen : OsuScreen
++    {
++        [Cached]
++        private readonly OverlayColourProvider colourProvider = new OverlayColourProvider(OverlayColourScheme.Purple);
++
++        [Resolved]
++        private IAPIProvider api { get; set; } = null!;
++
++        [Resolved]
++        private Clipboard clipboard { get; set; } = null!;
++
++        [Resolved]
++        private INotificationOverlay? notifications { get; set; }
++
++        [Resolved]
++        private LocalProfileManager? localProfiles { get; set; }
++
++        private P2PLobby? lobby;
++        private string? hostCode;
++
++        /// <summary>
++        /// What "Your code" shows. The box can be selected and copied from, but anything typed into it is put back.
++        /// </summary>
++        private string shownCode = string.Empty;
++
++        private FormTextBox codeBox = null!;
++        private FormTextBox joinBox = null!;
++        private RoundedButton connectButton = null!;
++        private Container peersContainer = null!;
++
++        private Header header = null!;
++        private Drawable notice = null!;
++        private Drawable leftColumn = null!;
++        private Drawable centre = null!;
++        private Drawable infoPanel = null!;
++
++        private readonly Dictionary<int, P2PFloatingAvatar> peerAvatars = new Dictionary<int, P2PFloatingAvatar>();
++
++        protected override BackgroundScreen CreateBackground() => new P2PBackground();
++
++        [BackgroundDependencyLoader]
++        private void load(OsuColour colours)
++        {
++            OsuTextFlowContainer info;
++
++            InternalChildren = new Drawable[]
++            {
++                header = new Header("Multiplayer · P2P", null),
++                notice = new CircularContainer
++                {
++                    Anchor = Anchor.TopCentre,
++                    Origin = Anchor.TopCentre,
++                    Y = Header.HEIGHT + 10,
++                    AutoSizeAxes = Axes.Both,
++                    Masking = true,
++                    Children = new Drawable[]
++                    {
++                        new Box
++                        {
++                            RelativeSizeAxes = Axes.Both,
++                            Colour = colours.Yellow,
++                        },
++                        new FillFlowContainer
++                        {
++                            AutoSizeAxes = Axes.Both,
++                            Direction = FillDirection.Horizontal,
++                            Spacing = new Vector2(8, 0),
++                            Padding = new MarginPadding { Horizontal = 16, Vertical = 6 },
++                            Children = new Drawable[]
++                            {
++                                new SpriteIcon
++                                {
++                                    Anchor = Anchor.CentreLeft,
++                                    Origin = Anchor.CentreLeft,
++                                    Icon = FontAwesome.Solid.Fire,
++                                    Size = new Vector2(16),
++                                    Colour = Color4.Black,
++                                },
++                                new OsuSpriteText
++                                {
++                                    Anchor = Anchor.CentreLeft,
++                                    Origin = Anchor.CentreLeft,
++                                    Text = "This feature is very early in development",
++                                    Font = OsuFont.Default.With(size: 18, weight: FontWeight.SemiBold),
++                                    Colour = Color4.Black,
++                                },
++                            }
++                        }
++                    }
++                },
++                new GridContainer
++                {
++                    RelativeSizeAxes = Axes.Both,
++                    // Same space above and below, so the content sits in the middle of the screen.
++                    Padding = new MarginPadding { Vertical = Header.HEIGHT + 50, Horizontal = 20 },
++                    ColumnDimensions = new[]
++                    {
++                        new Dimension(GridSizeMode.Absolute, 320),
++                        new Dimension(),
++                        new Dimension(GridSizeMode.Absolute, 340),
++                    },
++                    Content = new[]
++                    {
++                        new Drawable[]
++                        {
++                            leftColumn = new FillFlowContainer
++                            {
++                                Anchor = Anchor.CentreLeft,
++                                Origin = Anchor.CentreLeft,
++                                RelativeSizeAxes = Axes.X,
++                                AutoSizeAxes = Axes.Y,
++                                Direction = FillDirection.Vertical,
++                                Spacing = new Vector2(0, 20),
++                                Children = new[]
++                                {
++                                    createPanel(new RoundedButton
++                                        {
++                                            Anchor = Anchor.TopCentre,
++                                            Origin = Anchor.TopCentre,
++                                            Width = 200,
++                                            Text = "Create Code",
++                                            Action = showCode,
++                                        },
++                                        codeBox = new FormTextBox
++                                        {
++                                            RelativeSizeAxes = Axes.X,
++                                            Caption = "Your code",
++                                            HintText = "Share it with the people who should join you. Copied when created.",
++                                        }),
++                                    createPanel(joinBox = new FormTextBox
++                                        {
++                                            RelativeSizeAxes = Axes.X,
++                                            Caption = "Code",
++                                            HintText = "The code of the person you want to join.",
++                                            LengthLimit = 9,
++                                        },
++                                        connectButton = new RoundedButton
++                                        {
++                                            Anchor = Anchor.TopCentre,
++                                            Origin = Anchor.TopCentre,
++                                            Width = 200,
++                                            Text = "Connect via Code",
++                                            Action = connect,
++                                        }),
++                                }
++                            },
++                            centre = new Container
++                            {
++                                Anchor = Anchor.Centre,
++                                Origin = Anchor.Centre,
++                                RelativeSizeAxes = Axes.Both,
++                                Children = new Drawable[]
++                                {
++                                    peersContainer = new AspectContainer
++                                    {
++                                        Anchor = Anchor.Centre,
++                                        Origin = Anchor.Centre,
++                                        RelativeSizeAxes = Axes.Y,
++                                        Height = 0.9f,
++                                    },
++                                    new MatchmakingAvatar(api.LocalUser.Value, true)
++                                    {
++                                        Anchor = Anchor.Centre,
++                                        Origin = Anchor.Centre,
++                                        Scale = new Vector2(4),
++                                    },
++                                }
++                            },
++                            infoPanel = new Container
++                            {
++                                Anchor = Anchor.CentreRight,
++                                Origin = Anchor.CentreRight,
++                                RelativeSizeAxes = Axes.X,
++                                AutoSizeAxes = Axes.Y,
++                                Masking = true,
++                                CornerRadius = 10,
++                                Children = new Drawable[]
++                                {
++                                    new Box
++                                    {
++                                        RelativeSizeAxes = Axes.Both,
++                                        Colour = colourProvider.Background5,
++                                        Alpha = 0.9f,
++                                    },
++                                    info = new OsuTextFlowContainer(s => s.Font = OsuFont.Default.With(size: 16))
++                                    {
++                                        RelativeSizeAxes = Axes.X,
++                                        AutoSizeAxes = Axes.Y,
++                                        Padding = new MarginPadding(15),
++                                        TextAnchor = Anchor.TopCentre,
++                                        ParagraphSpacing = 0.4f,
++                                    },
++                                }
++                            },
++                        }
++                    }
++                },
++            };
++
++            info.AddParagraph("Whenever you enter this screen, it opens a server on your machine for people to connect via 8 symbol code you share.");
++            info.AddParagraph("When they connect to you, they should appear as floating circle in a few seconds.");
++            info.AddParagraph("If ", heading);
++            info.AddText("NOTHING", s =>
++            {
++                heading(s);
++                s.Font = s.Font.With(weight: FontWeight.Bold);
++                s.Colour = colours.Pink;
++            });
++            info.AddText(" is happening:", heading);
++            info.AddParagraph("1. Make sure Patchsu is not blocked by firewall");
++            info.AddParagraph("2. Check if you have VPN on");
++            info.AddParagraph("3. For now both of you have to be on the same network (LAN)");
++            info.AddParagraph("Personal recommendations:", heading);
++            info.AddParagraph("1. Login into your osu! account to download beatmaps directly from Bancho");
++            info.AddParagraph("2. Hop in voice with your bro :)");
++
++            static void heading(SpriteText s) => s.Font = OsuFont.Default.With(size: 24);
++        }
++
++        private Drawable createPanel(params Drawable[] content) => new Container
++        {
++            RelativeSizeAxes = Axes.X,
++            AutoSizeAxes = Axes.Y,
++            Masking = true,
++            CornerRadius = 10,
++            Children = new Drawable[]
++            {
++                new Box
++                {
++                    RelativeSizeAxes = Axes.Both,
++                    Colour = colourProvider.Background5,
++                    Alpha = 0.9f,
++                },
++                new FillFlowContainer
++                {
++                    RelativeSizeAxes = Axes.X,
++                    AutoSizeAxes = Axes.Y,
++                    Direction = FillDirection.Vertical,
++                    Spacing = new Vector2(0, 15),
++                    Padding = new MarginPadding(20),
++                    Children = content,
++                }
++            }
++        };
++
++        protected override void LoadComplete()
++        {
++            base.LoadComplete();
++
++            codeBox.Current.BindValueChanged(v =>
++            {
++                if (v.NewValue != shownCode)
++                    Schedule(() => codeBox.Current.Value = shownCode);
++            });
++
++            startHosting();
++        }
++
++        public override void OnEntering(ScreenTransitionEvent e)
++        {
++            base.OnEntering(e);
++
++            // Each part comes in from its own side, one after another (like ranked play's queue screen).
++            appear(header, new Vector2(-30, 0), 0);
++            appear(notice, new Vector2(0, -20), 100);
++            appear(leftColumn, new Vector2(-60, 0), 150);
++            appear(infoPanel, new Vector2(60, 0), 250);
++
++            centre.ScaleTo(0.8f).FadeOut()
++                  .Delay(200)
++                  .ScaleTo(1, 1000, Easing.OutElasticHalf)
++                  .FadeIn(500, Easing.OutQuint);
++        }
++
++        private static void appear(Drawable drawable, Vector2 offset, double delay)
++        {
++            var position = drawable.Position;
++
++            drawable.MoveTo(position + offset).FadeOut()
++                    .Delay(delay)
++                    .MoveTo(position, 800, Easing.OutQuint)
++                    .FadeIn(500, Easing.OutQuint);
++        }
++
++        private void setShownCode(string code)
++        {
++            shownCode = code;
++            codeBox.Current.Value = code;
++        }
++
++        private P2PPeer createSelf()
++        {
++            var user = api.LocalUser.Value;
++            byte[]? avatar = null;
++
++            if (localProfiles != null && user.Id <= LocalPriorityPolicy.LOCAL_PROFILE_ID_CEILING)
++            {
++                try
++                {
++                    string? file = localProfiles.Store.GetAvatarFile(user.Id);
++
++                    if (file != null)
++                    {
++                        using var stream = localProfiles.Store.AvatarStorage.GetStream(file);
++
++                        if (stream != null && stream.Length <= P2PLobby.MAX_AVATAR_SIZE)
++                        {
++                            using var memory = new MemoryStream();
++                            stream.CopyTo(memory);
++                            avatar = memory.ToArray();
++                        }
++                    }
++                }
++                catch (Exception e)
++                {
++                    Logger.Error(e, "P2P: couldn't read the profile picture");
++                }
++            }
++
++            return new P2PPeer { Username = user.Username, UserId = user.Id, Avatar = avatar };
++        }
++
++        private void startHosting()
++        {
++            hostCode = null;
++            setShownCode(string.Empty);
++
++            try
++            {
++                setLobby(P2PLobby.Host(createSelf()));
++                hostCode = P2PLobby.CreateCode();
++            }
++            catch (SocketException e)
++            {
++                setLobby(null);
++                notifications?.Post(new SimpleErrorNotification { Text = $"Couldn't open a P2P lobby on port {P2PLobby.PORT}: {e.Message}" });
++            }
++        }
++
++        private void showCode()
++        {
++            if (lobby?.IsHost != true)
++                startHosting();
++
++            if (hostCode == null)
++            {
++                notifications?.Post(new SimpleErrorNotification { Text = "Couldn't find your local network address." });
++                return;
++            }
++
++            setShownCode(hostCode);
++            clipboard.SetText(hostCode);
++        }
++
++        private void connect()
++        {
++            string code = joinBox.Current.Value;
++
++            if (!P2PLobby.TryDecodeCode(code, out _))
++            {
++                notifications?.Post(new SimpleErrorNotification { Text = "This code is not valid." });
++                return;
++            }
++
++            setLobby(null);
++            connectButton.Enabled.Value = false;
++            setShownCode(string.Empty);
++
++            P2PLobby.JoinAsync(code, createSelf()).ContinueWith(t => Schedule(() =>
++            {
++                connectButton.Enabled.Value = true;
++
++                if (t.IsCompletedSuccessfully)
++                {
++                    if (this.IsCurrentScreen())
++                        setLobby(t.GetResultSafely());
++                    else
++                        t.GetResultSafely().Dispose();
++
++                    return;
++                }
++
++                notifications?.Post(new SimpleErrorNotification { Text = $"Couldn't connect: {t.Exception?.GetBaseException().Message}" });
++                startHosting();
++            }));
++        }
++
++        private void setLobby(P2PLobby? newLobby)
++        {
++            lobby?.Dispose();
++            lobby = newLobby;
++
++            updatePeers(Array.Empty<P2PPeer>());
++
++            if (newLobby == null)
++                return;
++
++            newLobby.PeersChanged += peers => Schedule(() =>
++            {
++                if (lobby == newLobby)
++                    updatePeers(peers);
++            });
++
++            newLobby.Disconnected += () => Schedule(() =>
++            {
++                if (lobby != newLobby)
++                    return;
++
++                notifications?.Post(new SimpleNotification { Text = "Lost the connection to the lobby." });
++                startHosting();
++            });
++        }
++
++        private void updatePeers(IReadOnlyCollection<P2PPeer> peers)
++        {
++            foreach (int id in peerAvatars.Keys.Where(id => peers.All(p => p.Id != id)).ToArray())
++            {
++                // Ones still loading are dropped when they finish.
++                if (peerAvatars[id].IsLoaded)
++                    peerAvatars[id].FadeOut(500).Expire();
++
++                peerAvatars.Remove(id);
++            }
++
++            foreach (var peer in peers.Where(p => !peerAvatars.ContainsKey(p.Id)))
++            {
++                var avatar = peerAvatars[peer.Id] = new P2PFloatingAvatar(peer);
++
++                LoadComponentAsync(avatar, loaded =>
++                {
++                    if (peerAvatars.ContainsValue(loaded))
++                        peersContainer.Add(loaded);
++                    else
++                        loaded.Dispose();
++                });
++            }
++        }
++
++        public override bool OnExiting(ScreenExitEvent e)
++        {
++            setLobby(null);
++
++            this.FadeOut(250, Easing.OutQuint);
++            leftColumn.MoveToX(-60, 400, Easing.OutQuint);
++            infoPanel.MoveToX(60, 400, Easing.OutQuint);
++            centre.ScaleTo(0.9f, 400, Easing.OutQuint);
++
++            return base.OnExiting(e);
++        }
++
++        protected override void Dispose(bool isDisposing)
++        {
++            base.Dispose(isDisposing);
++            lobby?.Dispose();
++        }
++
++        /// <summary>
++        /// osu!'s own "bg2" background, slightly blurred and 40% darker, so the menu's light backgrounds don't show through.
++        /// </summary>
++        private partial class P2PBackground : BackgroundScreenCustom
++        {
++            public P2PBackground()
++                : base(@"Backgrounds/bg2")
++            {
++            }
++
++            protected override void LoadComplete()
++            {
++                base.LoadComplete();
++
++                var background = InternalChildren.OfType<Background>().Single();
++                background.BlurTo(new Vector2(5));
++                background.Colour = OsuColour.Gray(0.6f);
++            }
++        }
++    }
++}

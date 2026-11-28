@@ -7,5 +7,5 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 go generate ./internal/bundle
-go build -ldflags "-X main.Version=1.1" -o Patchsu-CLI .
+go build -ldflags "-X main.Version=1.3" -o Patchsu-CLI .
 echo "Built Patchsu-CLI/Patchsu-CLI (uses ../Patchsu/patches; built-in copy of them too)"

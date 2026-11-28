@@ -12,38 +12,46 @@
 
 1. **Respect what osu!team does and how good their code is. Most of those AI shenanigans are only available because of how thought out human-written code is. AI could never do this or that quickly without them.**
 
-2. Patches provided do not break any rules of osu! that are stated on the wiki or MIT licensing, **HOWEVER**, **I HIGHLY ADVISE DO NOT RETURN SCORE SUBMISSION FUNCTIONALITY ON YOUR OWN**, because after patches **this will count as third-party client**, and logging into third-party clients for this is dishonest and is technically unnecessary strain on osu!servers. Despite this, those patches are provided for, subjectively, *better* user experience and different improvements on the game.
+2. Patches provided do not break any rules of osu! that are stated on the wiki or MIT licensing, **HOWEVER**, **I HIGHLY ADVISE DO NOT RETURN SCORE SUBMISSION FUNCTIONALITY ON YOUR OWN**, because after patches **this will count as third-party client**, and logging into third-party clients for this is dishonest and is technically unnecessary strain on osu!servers. Despite this, those patches are provided for, subjectively, *better* user experience and different improvements on the game as well as practicing stuff.
 
 3. **I DO NOT recommend using this as main client**, unless you prefer local-focused play / banned, or just to fuck around with new mods/features. I update things pretty frequently for now, because I use it every day until my hyperfixation goes away (then it'll enter maintance state)
 
-4. Client does not connect you to any server but official osu! one if **you** login into your account. You can create patches to connect to other servers/accounts as well and submit them as pull request if you want. 
+4. Client does not connect you to any server but official osu! one if **you login** into your account. You can create patches to connect to other servers/accounts as well and submit them as pull request if you want and custom server allows it.
 
-5. I know how Peppy treat AI, however this repository is 95% AI driven anyway because I'm not familiar with programming besides few .sh scripts, but I do read code trying to understand it and test every feature A LOT for things to be polished and working. I'm not a programmer and never claim to be one, I just want to try things out and implement as much features as possible that are scattered between different clients in one so it would feel fun to play for me. I try to treat it responsibly and actually think about features A LOT before actually asking to implement them as well as making mock-up designs firstly (Need to do mod icons still).
+5. I know how Peppy treat AI, however this repository is 95% AI driven anyway because I'm not familiar with programming besides few .sh scripts, but I do read code trying to understand it and test every feature A LOT for things to be polished and working. I'm not a programmer and never claim to be one, I just want to try things out and implement as much features as possible that are scattered between different clients in one so it would feel fun to play for me. I try to treat it responsibly and actually think about features A LOT before actually asking to implement them as well as making mock-up designs firstly, but I can't do everything alone even with Claudes help, because there is just not enough time for me to test ALL the stuff.
 
 ## TL;DR
+
+### [Download already compiled version!](https://github.com/PorkingMane/Patchsu/releases/tag/Compiled-releases-v1)
+Those will stay on the same patch and will not auto-update, meaning you need to update it manually for now. This is open-beta test that ease entering experience to Patchsu from CLI tool to Download > Unpack > Launch.
+
+### [Download CLI tool that will set everything up for you automatically](https://github.com/PorkingMane/Patchsu/releases)
+Takes ~2 minutes max if you have medium-power PC, but initial setup needs to be done only once, then you just click enter a few times and everything is updated to latest, available on github, patch version.
+I know that people hate when they need to research and do stuff when they just want to try things out, so there is also a GOLang based CLI tool that will guide you through everything you need to do and a short description of every patch if you forget something. I think this works on every version, but tested on Windows/Linux only and by 2 people only. If it doesn't work, please open an issue/download already compiled version
+
+
 ### Showcase video below; [click for Showcase screenshots](screenshots/)
 No video yet, you've found/got recommended this repo while its still in its earlier stages
 
 *put video here*
 
-### [Everything these patches implement](PATCHES.md)
-### [Download CLI tool that will set everything up for you automatically](https://github.com/PorkingMane/Patchsu/releases).
-Takes ~2 minutes max if you have medium-power PC, but this needs to be done only once.
-I know that people hate when they need to research and do stuff when they just want to try things out, so there is also a GOLang based CLI tool that will guide you
-through everything you need to do and a short description of every patch if you forget something. Should work on every system, but tried only on Linux because
-that's what I run.
-### [How to contribute/suggest stuff](CONTRIBUTING.md).
+### [Everything these patches implement in great detail](PATCHES.md)
+
+### [Descriptive changelog for each change](CHANGELOG.md)
+
+### [How to contribute/suggest stuff](CONTRIBUTING.md)
 Or join discord on top of this README!!!
 
 # What this repository is
 
-Those are .patch files for osu!lazer open-sourced (that will stay that way, hopefully) client that you need to compile yourself on your end via provided .sh/.cmd files in release tab or downloading entire repository yourself and opening said .sh/.cmd files. You can mix and match those patches any way you want to create personal experience or to add things to the game you always wanted, but are too far along on ppy team roadmap. Right now most of the features are aimed on a local-based play because of personal reasons, but this will expand in the future (hopefully), as well as you can submit your own patches on top of what already provided in the repo via Pull Requests, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Those are .patch files for osu!lazer open-sourced (that will stay that way, hopefully) client, its highly **recommended** that you compile yourself on your end via provided .sh/.cmd files in release tab, you can mix and match those patches any way you want to create personal experience or to add things to the game you always wanted, but are too far along on ppy team roadmap. CLI automatically sync with this github repository to apply updated patches... Or downloading pre-compiled release that includes every patch applied to it with every feature on the time of compiling. Right now most of the features are aimed on a local-based play because of personal reasons, but this will expand in the future (hopefully), as well as you can submit your own patches on top of what already provided in the repo via Pull Requests, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 <details> <summary> My incentive to do another 'github repo slop' when there is infinite amount of other clients </summary>
 Everyone is making a their own fork of the client/server to implement features that they want, which on itself is a good thing, because people are trying stuff out, but having so many of the same 'private servers' or 'forks' that do mostly the same thing is kinda boring and repetitive, especially in the age of AI when you can iterate features faster than ever. I don't want for lazer to go close-sourced (as a possible consideration was stated in [this](https://youtu.be/hxz6ieZx_jQ) osu!update video), because experimenting and people trying stuff they want is the utmost priority to keep community healthy, no matter if the things are done with AI or not.
 
 Instead, I'd love to actually experiment on my own and .patch stuff on top of base osu!lazer if that fulfills both osu!team (to pace at their own, implementing carefully crafted features without any AI) and community/mine (fuck around and do cool stuff that are fun to play with / can help people get better mentally or skill-wise) desires.
-I think its a fair game as long as people don't annoy each other and act reasonable... Also I hate stable (stable is almost the same age as me bruh), McOsu is really old as well, and many clients do not update/keep up with lazer rather going their own path, so idea of .patch files that can be split up and built differently feels a lot better to me than dividing the community into many forks that serve different purposes (I'm aware that this repo will only contribute to this problem with 99% certainty either way, but I'll try to maintain it as long as possible).
+I think its a fair game as long as people don't annoy each other and act reasonable... Also I hate stable (stable is almost the same age as me bruh), McOsu is really old as well, and many clients do not update/keep up with lazer rather going their own path or just being a 'Private Server' client, so idea of .patch files that can be split up and built differently feels a lot better to me than dividing the community into many forks that serve different purposes (I'm aware that this repo will only contribute to this problem with 99% certainty either way, but I'll try to maintain it as long as possible).
+
 </details>
 
 ## Patch logic
@@ -55,7 +63,7 @@ Most patches are small and tweak little things, like few UI changes, but, for ex
 
 Patches are updated separately if possible, but to successfully test if it compiles I suggest testing it with minimal and maximum required of patches possible.
 
-Patchsu uses the official osu! data folder (`~/.local/share/osu`, `%APPDATA%\osu`), so your beatmaps, skins and scores are shared with the official client. Patchsu's own data (settings in `PatchsuSettings.json`, local profiles, caches) lives in its `patchsu-osu/` subfolder (called `osu-local/` before; it is renamed on the first start). Only one of the two clients can run at a time.
+Patchsu uses the official osu! data folder (`~/.local/share/osu`, `%APPDATA%\osu`), so your beatmaps, skins and scores are shared with the official client. Patchsu's own data (settings in `PatchsuSettings.json`, local profiles, caches) lives in its `patchsu-osu/` subfolder (called `osu-local/` before; it is renamed on the first start). Scores submitted on this client still go towards your osu! database, so if you set a score with non-vanilla mod it will show so and refuse to launch replay, unless you view it through Patchsu. Only one of the two clients should run at a time.
 
 ### Most notable things implemented
 All things documented here already can be compiled via provided .sh / .cmd files (or CLI tool in release tab) and are heavily tested.
@@ -77,14 +85,14 @@ All things documented here already can be compiled via provided .sh / .cmd files
   - Mod auto-equip based on profiles
   - Auto-profile change when entering a beatmap with a specific tag / bpm / star rate / length *(if you are OCD pilled)*
   - Local beatmap tags submission after completion (because not every map tagged properly)
-  - Estimated Global Ranking based on profile current PP (*yoinked from https://github.com/Azuuryy/ritsu*, snapshot was taken in September 2026)
+  - Estimated Global Ranking based on profile current PP (*yoinked from https://github.com/Azuuryy/ritsu*, snapshot updated to [November 2026](https://data.ppy.sh/) for all rulesets)
   - Obligatory Relax/Autopilot PP, because everyone do that lmao
   - Ignoring 'Unranked' mods status. Toggling this will only affect mods that makes plays count as Unranked. Unranked maps are still unranked
   - 'Everything is ranked mode' to match McOsu and Mosu. Every map counts as ranked on that specific profile / all profiles
   - Online lookup from Local account so you don't have to switch between official and local one
   - 'Sudden Death' option, profile will automatically be deleted whenever you miss. Auto-deletes after 30 seconds (or a minute, in settings) / right after you close profile GUI *(yt content)*
   - 'Perfect Death' option, SD but PF *(yt content 2)*
-  - 'Speedrun' option, set a PP or #rank goal and a timer counts how long the profile was active until you reach it
+  - 'Speedrun' option, set a PP or #rank goal and a timer counts how long the profile was active until you reach it. Works for every vanilla ruleset.
   - Importing replays as selected profile DIRECTLY in osu! database
   - PP exclusion for selected score/beatmap/mapset
   - Exporting top 50 / every score recorded on local profile
@@ -119,6 +127,8 @@ All things documented here already can be compiled via provided .sh / .cmd files
 [AGENTS.md](AGENTS.md) - if you let an AI agent update/do anything, point it here
 
 # License
-This patch files use the MIT license, which matches the license of the upstream client (osu!lazer).
-**Exception:** the Modosu-derived mods in `0500-Ritsu-Mods.patch` are GPL-3.0 (the patch adds `LICENCE-Modosu.txt` to the tree), so a build that includes 0500 is GPL-3.0 as a whole.
-See [LICENSE](LICENSE) for more information
+This patch files use the MIT license, which matches the license of the upstream client (osu!lazer). I am not endorsed by Peppy or ppy Pty Ltd, this is a enthusiasm-driven project that main purpose is to port [McOsu](https://github.com/McKay42/McOsu) feeling and usability on top of lazer, be it practice or just fun challenges. Features will be taken down on demand from either party that we use features from, though, I got official approval from McKay42, tkn and Azuuryy for implementing their features into this client.
+
+**Exception:** the Modosu-derived mods (coming from [Mosu!](https://github.com/p-720/mosu) ruleset made for osu!lazer) in `0500-Ritsu-Mods.patch` are GPL-3.0 (the patch adds `LICENCE-Modosu.txt` to the tree), so a build that includes 0500 is GPL-3.0 as a whole.
+
+See [LICENSE](LICENSE) for more information.

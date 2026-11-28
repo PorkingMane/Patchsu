@@ -62,11 +62,23 @@ Only cuts online access, nothing else.
   `PPAwareCarousel` (0007), `ModCompatibility` (0008), `NoFail` (0009).
 - News, changelog, wiki, rankings, chat and social buttons and multiplayer / playlists / daily challenge are removed from the menus.
 - The game calls itself "Patchsu" (window title, app name). The data folder stays the official `osu` one.
+- Settings footer (`SettingsFooter`): reads `patchsu-build.json` (written by Patchsu-CLI next to the game binary,
+  `AppContext.BaseDirectory`) once when settings load. With it: "Patchsu V<cliVersion>" and "osu! <osuBase> · <osuCommit[..10]>"
+  (LMB opens `osuTree` on GitHub, RMB copies the line). Without it (`build-patchsu.sh`, dev builds): vanilla name + version line.
+  `osuBase` comes from `patches.meta.json`: `git describe` of the osu! commit as "<last release>+<commits since>"
+  (2026.1117.0-lazer-6-g8cb6e6e68d → "2026.1117.0+6"). **Update it whenever `osuCommit` changes.**
 
 Shared menu colour (not part of the offline purpose, lives here so patches don't conflict):
 
 - `MenuItemType.Positive` → `OsuColour.Green1` in `DrawableOsuMenuItem`, for items that undo a destructive one (0002's
   "Include ... in PP again"). 0003's `External` is added after it, so 0003's hunks have `Positive` as context.
+
+Shared mod select fix (lives here because 0500, 0501 and 0502 all need it and only share 0001):
+
+- `UserModSelectOverlay.ComputeNewModsFromSelection`: a clicked mod also drops selected mods that list it in their
+  `IncompatibleMods`. Patch mods list vanilla mods one way (No Sliding → Strict Tracking, Streamline → RandomV2 …), so lazer's
+  swap only flagged the clicked mod and `OsuGameBase` then removed it: the click did nothing. Vanilla mods' lists are symmetric,
+  so nothing changes for them.
 
 ## 0002 · Local profiles
 
@@ -74,6 +86,7 @@ A fully local profile system with its own profile page, laid out like the websit
 
 - Right-click your name in the toolbar to switch between the online account and local profiles; left-click opens the profile page
   (stats, PP graph, best / recent scores, play history, most played, editing in place).
+  The page always opens scrolled to the top (`PopIn` → `scroll.ScrollToStart(false)`); switching profiles while open keeps the scroll.
 - Local profiles send nothing to osu! servers. With "online lookups" on, beatmap info / downloads, tags and leaderboards use the
   signed-in online account (scores are still never submitted).
 - Per-profile play count, play time, hits, PP and an estimated global rank (all four rulesets). Total Play Time reads like the website's / lazer's
@@ -259,7 +272,8 @@ A results-screen panel where every number can be typed into, to see what a play 
 
 - Open it from song select → Options (F3) → "Simulate PP" (starts at SS), a leaderboard score's right-click → "Simulate PP",
   or the calculator button on a results screen.
-- Typing accuracy or PP turns 300s into 100s (then 50s) and keeps misses and combo (osu-tools style).
+- Typing accuracy or PP turns 300s into a mix of 100s and 50s (fewest 50s) and keeps misses and combo, unless the value
+  can't be reached with those misses: then the fewest misses that reach it become 300s.
 - "Fix choke": left click turns misses into 100s, right click into 300s. Hits every slider tick; slider ends stay.
   
 
@@ -319,7 +333,7 @@ acronyms kept as in Ritsu.
 | System | Phrase Mirror (PMR), Echo (ECH), Swing (SWG) |
 
 Patchsu additions: No Sliding length threshold, and scores saved with an unresolved mod (`XX??`)
-resolve to the real mod, as does the old RandomV2 acronym `RDV2`. Own mod icons for Decoy Circles, Miss Challenge, No Sliding and RandomV2 (`ritsu-*.png`). Not ported: Directional Flicks, RandomV2 / Spacing Adjust replay panels.
+resolve to the real mod, as do old acronyms of renamed mods (DCY, HST, HFR, RDV2, RSL, SOT). Own mod icons for Decoy Circles, Miss Challenge, No Sliding and RandomV2 (`ritsu-*.png`). Not ported: Directional Flicks, RandomV2 / Spacing Adjust replay panels.
 RandomV2 settings are reordered (`OrderPosition`: spacing, angles, patterns, Seed last) and reworded. "Angle style"
 (Random / Star / 45° / 90°, `AngleStyleSetting`) replaces the "Custom angle" toggle: it drives the still saved `CustomAngle` +
 `Angle` (Random = `CustomAngle` off, or on with `AngleEnum.Custom` while patterns are selected; picking a pattern turns it on), so

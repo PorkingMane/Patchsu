@@ -8217,10 +8217,10 @@ index 0000000000..80249a74d9
 +}
 diff --git a/osu.Game/LocalPriority/LocalProfileOverlay.cs b/osu.Game/LocalPriority/LocalProfileOverlay.cs
 new file mode 100644
-index 0000000000..cd7edc5ae5
+index 0000000000..9d1e2e59ec
 --- /dev/null
 +++ b/osu.Game/LocalPriority/LocalProfileOverlay.cs
-@@ -0,0 +1,4306 @@
+@@ -0,0 +1,4308 @@
 +using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -8813,6 +8813,8 @@ index 0000000000..cd7edc5ae5
 +        {
 +            // Opening: FullscreenOverlay fades its shadow in itself.
 +            setEdgeGlow(null, fadeShadowBack: false);
++            // Always open at the top, like the online profile does.
++            scroll.ScrollToStart(false);
 +            base.PopIn();
 +
 +            opened = false;

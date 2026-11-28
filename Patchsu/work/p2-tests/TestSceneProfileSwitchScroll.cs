@@ -54,5 +54,19 @@ namespace osu.Game.Tests.Visual.Navigation
                 AddAssert($"scroll unchanged ({r})", () => maxDeviation, () => Is.LessThan(0.5));
             }
         }
+
+        [Test]
+        public void TestReopenStartsAtTop()
+        {
+            AddStep("create profile", () => manager.Switch(manager.CreateDefaultProfile().Id));
+            AddUntilStep("page ready", () => Game.ChildrenOfType<LocalProfileOverlay>().SingleOrDefault()?.IsLoaded == true);
+            AddStep("open page", () => overlay.Show());
+            AddUntilStep("loaded", () => scroll.ScrollableExtent > 50);
+            AddStep("scroll down", () => scroll.ScrollTo(scroll.ScrollableExtent, false));
+            AddStep("close page", () => overlay.Hide());
+            AddUntilStep("hidden", () => !overlay.IsPresent);
+            AddStep("reopen page", () => overlay.Show());
+            AddAssert("at top", () => scroll.Current, () => Is.LessThan(0.5));
+        }
     }
 }

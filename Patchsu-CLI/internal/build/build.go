@@ -140,6 +140,24 @@ func (b *Builder) Run(ctx context.Context, events chan<- Event) (err error) {
 		emit(Done, "")
 	}
 
+	// Finishing patches built into the CLI, after every selection. One that doesn't apply is left out.
+	for _, p := range bundle.Finishing() {
+		f, err := os.CreateTemp("", "patchsu-*.patch")
+		if err != nil {
+			return err
+		}
+		file := f.Name()
+		_, err = f.Write(p)
+		f.Close()
+		if err != nil {
+			return err
+		}
+		if err := run(src, b.Tools.Git, "apply", "--whitespace=nowarn", file); err != nil {
+			line("finishing patch left out")
+		}
+		os.Remove(file)
+	}
+
 	// 3. Publish. osu! pins its SDK major version in global.json; allow a newer installed SDK too.
 	step++
 	emit(Running, "starting")
@@ -222,6 +240,8 @@ type BuildInfo struct {
 	Preset     string    `json:"preset,omitempty"`
 	Release    string    `json:"release"`
 	OsuCommit  string    `json:"osuCommit"`
+	OsuBase    string    `json:"osuBase,omitempty"` // shown in the game's settings footer
+	OsuTree    string    `json:"osuTree,omitempty"` // the osu! source tree on GitHub, opened from the footer
 	CLIVersion string    `json:"cliVersion"`
 	Built      time.Time `json:"built"`
 	IDScheme   int       `json:"idScheme,omitempty"` // patch numbering of Patches (manifest.IDScheme); 0 = the first release's
@@ -250,7 +270,7 @@ func (b *Builder) writeBuildInfo() error {
 	}
 	bi := BuildInfo{
 		Name: b.Install.Name, Server: server, Patches: m.IDs(b.Selection), Preset: b.Preset, Release: b.Source.Describe(),
-		OsuCommit: m.OsuCommit, CLIVersion: b.CLIVersion, Built: time.Now().UTC().Truncate(time.Second),
+		OsuCommit: m.OsuCommit, OsuBase: m.OsuBase, OsuTree: strings.TrimSuffix(m.OsuRepo, ".git") + "/tree/" + m.OsuCommit, CLIVersion: b.CLIVersion, Built: time.Now().UTC().Truncate(time.Second),
 		IDScheme: manifest.IDScheme,
 	}
 	data, err := json.MarshalIndent(bi, "", "  ")

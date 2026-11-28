@@ -31,6 +31,11 @@ func main() {
 			must(os.RemoveAll(p))
 		}
 	}
+	// Local finishing patches (not in the repo), applied after the selected patches on every build.
+	finish, _ := filepath.Glob(filepath.Join(repo, "Patchsu", "work", "rebrand", "*.patch"))
+	for _, p := range finish {
+		must(copyFile(p, filepath.Join("patches", "finish", filepath.Base(p))))
+	}
 	entries, err := os.ReadDir(from)
 	must(err)
 	n := 0

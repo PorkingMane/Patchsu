@@ -5873,7 +5873,7 @@ new file mode 100644
 index 0000000000..a458343fa4
 --- /dev/null
 +++ b/osu.Game/Overlays/Mods/RitsuModPlaque.cs
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,107 @@
 +// Copyright (c) 2026 Ritsu contributors. Licensed under the MIT Licence.
 +// See the LICENCE file in the repository root for full licence text.
 +
@@ -5970,9 +5970,10 @@ index 0000000000..a458343fa4
 +            });
 +
 +            // Bind to the panel's own Active: a GetBoundCopy() is only weakly referenced, gets garbage collected and the colour then stops following selection.
-+            active.BindValueChanged(a =>
++            // Read Active.Value, not NewValue: a rejected selection sets Active back to false inside the same change.
++            active.BindValueChanged(_ =>
 +            {
-+                Color4 colour = a.NewValue ? activeColour : idleColour;
++                Color4 colour = active.Value ? activeColour : idleColour;
 +                text.FadeColour(colour, transition_duration, Easing.OutQuint);
 +                if (tintIcon)
 +                    icon.FadeColour(colour, transition_duration, Easing.OutQuint);
@@ -6096,7 +6097,7 @@ diff --git a/osu.Game/Scoring/IConfiguredMod.cs b/osu.Game/Scoring/IConfiguredMo
 index c49bf360e6..32da68feb6 100644
 --- a/osu.Game/Scoring/IConfiguredMod.cs
 +++ b/osu.Game/Scoring/IConfiguredMod.cs
-@@ -43,10 +43,24 @@ public static Mod ToMod(this IConfiguredMod configuredMod, Ruleset ruleset)
+@@ -43,10 +43,38 @@ public static Mod ToMod(this IConfiguredMod configuredMod, Ruleset ruleset)
  
              Mod? resultMod = ruleset.CreateModFromAcronym(configuredMod.Acronym);
  
@@ -6110,9 +6111,23 @@ index c49bf360e6..32da68feb6 100644
 +                resultMod = ruleset.CreateModFromAcronym(recoveredAcronym);
 +            }
 +
-+            // Random V2 was renamed from "RDV2" to "V2". Keep older scores and replays loading it.
-+            if (resultMod == null && recoveredAcronym == @"RDV2")
-+                resultMod = ruleset.CreateModFromAcronym(@"V2");
++            // 0500 mods that changed acronym. Keep older scores and replays loading them.
++            if (resultMod == null)
++            {
++                string? renamed = recoveredAcronym switch
++                {
++                    @"DCY" => @"DY",
++                    @"HST" => @"SL",
++                    @"HFR" => @"OE",
++                    @"RDV2" => @"V2",
++                    @"RSL" => @"RS",
++                    @"SOT" => @"SP",
++                    _ => null
++                };
++
++                if (renamed != null)
++                    resultMod = ruleset.CreateModFromAcronym(renamed);
++            }
 +
              if (resultMod == null)
              {

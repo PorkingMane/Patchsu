@@ -31,6 +31,19 @@ func LogoPNG() []byte { return logoPNG }
 // so it becomes the .exe icon and the game's window icon on every system.
 func LogoICO() []byte { return logoICO }
 
+// Finishing returns the patches applied after the selected ones on every build (patches/finish/*.patch),
+// or nothing when the binary has none.
+func Finishing() [][]byte {
+	files, _ := fs.Glob(patchFiles, "patches/finish/*.patch")
+	out := make([][]byte, 0, len(files))
+	for _, f := range files {
+		if b, err := patchFiles.ReadFile(f); err == nil {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
 // Patches returns the built-in patches folder (patches.meta.json + *.patch), or nil when the binary has none.
 func Patches() fs.FS {
 	sub, err := fs.Sub(patchFiles, "patches")

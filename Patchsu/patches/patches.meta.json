@@ -1,6 +1,7 @@
 {
   "minCli": "1.0",
   "osuCommit": "8cb6e6e68db6ad3387004c004ed2eb5f9728be37",
+  "osuBase": "2026.1117.0+6",
   "osuRepo": "https://github.com/ppy/osu",
   "dotnetSdk": "10.0",
   "patches": [

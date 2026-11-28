@@ -654,6 +654,152 @@ index 6119640b2c..948a5cf4de 100644
  
              beatmapUpdater?.Dispose();
  
+diff --git a/osu.Game/Overlays/Mods/UserModSelectOverlay.cs b/osu.Game/Overlays/Mods/UserModSelectOverlay.cs
+index 16d71e557b..854ba4008e 100644
+--- a/osu.Game/Overlays/Mods/UserModSelectOverlay.cs
++++ b/osu.Game/Overlays/Mods/UserModSelectOverlay.cs
+@@ -42,8 +42,14 @@ protected override IReadOnlyList<Mod> ComputeNewModsFromSelection(IReadOnlyList<
+             foreach (var addedMod in addedMods)
+             {
+                 if (!ModUtils.CheckCompatibleSet(modsAfterRemoval.Append(addedMod), out var invalidMods))
++                {
+                     modsAfterRemoval = modsAfterRemoval.Except(invalidMods);
+ 
++                    // Patchsu: patch mods can list a mod as incompatible without that mod listing them back, which only flags the added mod.
++                    // Also drop selected mods that list the added one, so it replaces them like any other incompatible mod.
++                    modsAfterRemoval = modsAfterRemoval.Where(m => !m.IncompatibleMods.Any(t => t.IsInstanceOfType(addedMod)));
++                }
++
+                 modsAfterRemoval = modsAfterRemoval.Append(addedMod).ToList();
+             }
+ 
+diff --git a/osu.Game/Overlays/Settings/SettingsFooter.cs b/osu.Game/Overlays/Settings/SettingsFooter.cs
+index a32dec4ca8..16ba4acfe7 100644
+--- a/osu.Game/Overlays/Settings/SettingsFooter.cs
++++ b/osu.Game/Overlays/Settings/SettingsFooter.cs
+@@ -2,6 +2,7 @@
+ // See the LICENCE file in the repository root for full licence text.
+ 
+ using System;
++using System.IO;
+ using osu.Framework.Allocation;
+ using osu.Framework.Development;
+ using osu.Framework.Graphics;
+@@ -14,6 +15,7 @@
+ using osu.Game.Graphics.UserInterface;
+ using osu.Game.Localisation;
+ using osu.Game.Rulesets;
++using Newtonsoft.Json;
+ using osuTK;
+ using osuTK.Graphics;
+ 
+@@ -31,6 +33,13 @@ private void load(OsuGameBase game, RulesetStore rulesets)
+ 
+             FillFlowContainer modes;
+ 
++            // Patchsu: the Patchsu version and the osu! release + tree it was built from, out of the patchsu-build.json
++            // Patchsu-CLI writes next to the game. Builds without one show the vanilla version line.
++            var build = PatchsuBuild.Read();
++            var buildDisplay = build?.OsuCommit != null ? new BuildDisplay(build.OsuLine, build.OsuTree) : new BuildDisplay(game.Version);
++            buildDisplay.Anchor = Anchor.TopCentre;
++            buildDisplay.Origin = Anchor.TopCentre;
++
+             Children = new Drawable[]
+             {
+                 modes = new FillFlowContainer
+@@ -47,14 +56,10 @@ private void load(OsuGameBase game, RulesetStore rulesets)
+                 {
+                     Anchor = Anchor.TopCentre,
+                     Origin = Anchor.TopCentre,
+-                    Text = game.Name,
++                    Text = build?.CliVersion != null ? $@"{game.Name} V{build.CliVersion}" : game.Name,
+                     Font = OsuFont.GetFont(size: 18, weight: FontWeight.Bold),
+                 },
+-                new BuildDisplay(game.Version)
+-                {
+-                    Anchor = Anchor.TopCentre,
+-                    Origin = Anchor.TopCentre,
+-                }
++                buildDisplay,
+             };
+ 
+             foreach (var ruleset in rulesets.AvailableRulesets)
+@@ -79,9 +84,51 @@ private void load(OsuGameBase game, RulesetStore rulesets)
+             }
+         }
+ 
++        private class PatchsuBuild
++        {
++            [JsonProperty(@"cliVersion")]
++            public string? CliVersion { get; set; }
++
++            [JsonProperty(@"osuCommit")]
++            public string? OsuCommit { get; set; }
++
++            [JsonProperty(@"osuBase")]
++            public string? OsuBase { get; set; }
++
++            [JsonProperty(@"osuTree")]
++            public string? OsuTree { get; set; }
++
++            public string OsuLine
++            {
++                get
++                {
++                    string commit = OsuCommit!.Length > 10 ? OsuCommit[..10] : OsuCommit;
++                    return OsuBase != null ? $@"osu! {OsuBase} · {commit}" : $@"osu! {commit}";
++                }
++            }
++
++            public static PatchsuBuild? Read()
++            {
++                string path = Path.Combine(AppContext.BaseDirectory, @"patchsu-build.json");
++
++                if (!File.Exists(path))
++                    return null;
++
++                try
++                {
++                    return JsonConvert.DeserializeObject<PatchsuBuild>(File.ReadAllText(path));
++                }
++                catch
++                {
++                    return null;
++                }
++            }
++        }
++
+         private partial class BuildDisplay : OsuAnimatedButton, IHasContextMenu
+         {
+             private readonly string version;
++            private readonly string? url;
+ 
+             [Resolved]
+             private OsuColour colours { get; set; } = null!;
+@@ -89,9 +136,10 @@ private partial class BuildDisplay : OsuAnimatedButton, IHasContextMenu
+             [Resolved]
+             private OsuGame? game { get; set; }
+ 
+-            public BuildDisplay(string version)
++            public BuildDisplay(string version, string? url = null)
+             {
+                 this.version = version;
++                this.url = url;
+ 
+                 Content.RelativeSizeAxes = Axes.Y;
+                 Content.AutoSizeAxes = AutoSizeAxes = Axes.X;
+@@ -101,7 +149,10 @@ public BuildDisplay(string version)
+             [BackgroundDependencyLoader]
+             private void load(ChangelogOverlay? changelog)
+             {
+-                Action = () => changelog?.ShowBuild(version);
++                if (url != null)
++                    Action = () => game?.OpenUrlExternally(url);
++                else
++                    Action = () => changelog?.ShowBuild(version);
+ 
+                 Add(new OsuSpriteText
+                 {
 diff --git a/osu.Game/Overlays/SettingsOverlay.cs b/osu.Game/Overlays/SettingsOverlay.cs
 index a82db88021..c9b7d17d78 100644
 --- a/osu.Game/Overlays/SettingsOverlay.cs

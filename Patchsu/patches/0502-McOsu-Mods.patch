@@ -2650,7 +2650,7 @@ index 0000000000..f918009b8a
 +            });
 +
 +            // Bind to the panel's own Active: a GetBoundCopy() is only weakly referenced, gets garbage collected and the colour then stops following selection.
-+            active.BindValueChanged(a => text.FadeColour(a.NewValue ? mcosu_badge_active : mcosu_green, transition_duration, Easing.OutQuint), true);
++            active.BindValueChanged(_ => text.FadeColour(active.Value ? mcosu_badge_active : mcosu_green, transition_duration, Easing.OutQuint), true);
 +        }
 +    }
 +}

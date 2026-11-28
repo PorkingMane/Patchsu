@@ -28,7 +28,7 @@ import (
 )
 
 // Version is set at release time with -ldflags "-X main.Version=...".
-var Version = "1.1"
+var Version = "1.3"
 
 // The Windows icon and version info of Patchsu-CLI.exe (rsrc_windows_*.syso, committed).
 //go:generate go run github.com/tc-hib/go-winres@v0.3.3 simply --icon internal/bundle/logo/patchsu.ico --arch amd64,arm64 --manifest cli --product-name Patchsu-CLI --file-description "Patchsu-CLI: builds osu!lazer with Patchsu patches" --original-filename Patchsu-CLI.exe

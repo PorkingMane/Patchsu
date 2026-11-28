@@ -1,19 +1,20 @@
-Initially I thought that this repo will grow out of hand very quickly, but it actually happened because Claude like to write a lot of things... Video showcase probably would cover most of the information anyway, so this file is just for myself keeping track of big features.
+Initially I didn't think that this repo will grow out of hand very quickly, but it actually happened... Video showcase probably would cover most of the information anyway, so this file is just for myself keeping track of big features and features that differ from initial osu!lazer.
 
-These are all patches for now that are available in this github repo, I tried to explain each change as simple as possible. Again, I'm not a programmer, especially in C#, but I do understand every change that these patches do even without Claude explaining them to me, so everything is tested and *should* work fine, if not, create Issue on github or join discord
+These are all patches for now that are available in this github repo, I tried to explain each change as simple as possible. Again, I'm not a programmer, especially in C#, but I do understand every change that these patches do even without Claude explaining them to me, so everything is tested and *should* work fine, if not, create Issue on github or join Discord and tell me your problem.
 
 # Patch 0001. Offline-online-fix
 This disables any submission activity from this client, you can only retrieve information such as leaderboards, beatmaps, replays. It also keeps every patch's settings in one file, `patchsu-osu/PatchsuSettings.json` in your osu! data folder. Every patch is dependent on it for obvious reasons, we don't want to submit anything nor make AI change something to allow this client submitting scores on Bancho. I do know that lazer itself is limiting capability of sending stuff to the servers whenever you run dev builds, but still think this is better than not having one.
 
 # Features
 - Also adds 2 new colors for tooltips and popups. This differs from original osu!lazer, but this is smallest addition possible to make everything look neat
+- Also also adds a hook that other custom mods can latch onto to be interchangable with unavailable ones. Matches default lazer behaviour
 
 # Patch 0002. Local profiles
 This is a massive one. Literally, it has 16k lines of code in it at the time of writing.
 
 ## Features
 - Local profiles with options to create profiles based on mod rules, as well as:
-    - Estimated global rank based on your PP
+    - Estimated global rank based on your PP for every ruleset
     - Basic profile customisation with Profile Pictures, Flag, Nickname change
     - Sync your database scores with local profile name^
     - Auto switch between profiles on almost any trigger possible (BPM / Star Rating / Mapper / Map Tags, including local ones / Length / Title / Artist / Difficulty Names)

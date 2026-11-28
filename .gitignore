@@ -14,7 +14,6 @@
 /Patchsu/build-patchsu-version.cmd
 /Patchsu/github readme.md
 /Patchsu/Patchsu-CLI
-/Patchsu/Patchsu-CLI.exe
 
 # Patchsu/work: clones and builds stay local, test files and the review are tracked
 /Patchsu/work/*
@@ -24,10 +23,5 @@
 !/Patchsu/work/notes/patch-optimisation-review.md
 /Patchsu/work/*-tests/*.log
 
-# One-off helper scripts; only merge_sections.py is shared
-/tools/*
-!/tools/merge_sections.py
-
 # Patchsu patches that should not be present publically just yet
 /Patchsu/patches/1[0-9][0-9][0-9]-*.patch
-/Patchsu/patches/0002b*.patch

@@ -1,5 +1,31 @@
 Changelog go in patch numerical order, so 0001 will be first and 1000 will be last unless its a breaking change.
 
+## 2026-11-28 · 0001 Settings footer shows the Patchsu version and the osu! tree it was built from
+
+- **0001** `SettingsFooter`: "Patchsu V1.1" / "osu! 2026.1117.0+6 · 8cb6e6e68d", from `patchsu-build.json` next to the binary;
+  clicking the second line opens the ppy/osu tree, RMB copies it. No file → vanilla footer.
+- **Patchsu-CLI**: manifest `osuBase` (new, `patches.meta.json`), written into `patchsu-build.json` with `osuTree`
+  (`osuRepo/tree/osuCommit`). Older releases without `osuBase` show only the commit.
+- Tests: full stack and Vanilla+ build 0 warnings; checked on screen (scratch `OsuGame`). All work tests pass (383) except
+  `TestSpacingSliderShowsPreview` (p500, failed before). `go test`: manifest
+  `TestDisableRemovesDependents` (no "Local play" preset in meta) and tui `TestPickerFlow` fail before this change too.
+
+## 2026-11-28 · 0001/0500/0502 Incompatible patch mods can be swapped again, plaques follow it
+
+- **0001** `UserModSelectOverlay.ComputeNewModsFromSelection`: also drops selected mods whose `IncompatibleMods` list the clicked
+  mod. Patch mods (0500/0501/0502) list vanilla mods one way, so e.g. Strict Tracking with No Sliding selected, RandomV2 with
+  Streamline, or No Sliding with Reversed Sliders could not be picked at all (`OsuGameBase` stripped the clicked mod again).
+- **0500** `RitsuModPlaque`, **0502** `McOsuModPlaque`: colour from `active.Value` instead of `NewValue`. The rejected selection
+  reset `Active` inside the same change, so the plaque got a stale `true` and stayed in its selected colour.
+- Tests: `TestOneWayIncompatibleSwap` added to p500-tests. Full stack and 0001 alone build 0 warnings; all work tests pass except
+  `TestSpacingSliderShowsPreview` (p500, failed before this change too); p1000-tests not run (needs 1000).
+
+## 2026-11-28 · 0002 Local profile page always opens at the top
+
+- **0002** `LocalProfileOverlay.PopIn`: `scroll.ScrollToStart(false)` before `base.PopIn()`, so reopening the page starts at the top
+  instead of where it was closed (the online profile does the same). Switching profiles while the page is open still keeps the scroll.
+- Tests: `TestReopenStartsAtTop` added to p2-tests `TestSceneProfileSwitchScroll`. Full stack builds 0 warnings; p2-tests + opt-tests pass (105).
+
 ## 2026-11-28 · 0002 Best Performance placement numbers after "show more"
 
 - **0002** `LocalProfileOverlay` `ScoresPanel.addRows`: once the best list is expanded past its first 5, every best row gets
@@ -37,6 +63,18 @@ Changelog go in patch numerical order, so 0001 will be first and 1000 will be la
   root menu (e.g. a sub-collection under "Collections" in the beatmap menu). Neither side fits: framework placement as before.
 - Tests: `TestNestedSubmenuWithoutRoomOnRightOpensLeft` (p3-tests `TestSceneSubmenuSide`, fails without the fix). Full stack, Vanilla+
   and 0001+0003 build 0 warnings; p3-tests, p10-tests, opt-tests and vanilla menu tests pass (opt `DumpVariants` needs the osu ruleset tests project).
+
+## 2026-11-28 · 0006 Typed PP / accuracy removes misses when needed, mixes 100s and 50s
+
+- **0006** `PerformanceSimulation.distribute`: when the typed value can't be reached with the current misses (even at all 300s),
+  the fewest misses that reach it become 300s (binary search on the miss count), then the 300s are split as before. Misses stay
+  when the value can be reached with them. The combo follows like after typing the miss count (`applyStep`: at cap or no combo
+  breaks → cap, otherwise kept).
+- The 300s are now lowered in steps of 50 points (a 100 costs 4, a 50 costs 5, `splitLoss` uses as few 50s as possible), so
+  accuracy / PP fit about 4x finer than 100s alone; up to 3 50s show up before 100s run out. Header and remarks updated.
+- Tests: p6 `PerformanceSimulationTest` adds `TestTargetRemovesFewestMisses` and `TestAccuracyMixesOksAndMehs`; `TestAccuracyTarget`
+  allows up to 3 50s, `TestPerformanceTarget` expects an unreachable PP to remove the miss. Full stack and Vanilla+ build 0 warnings;
+  p6 tests + opt-tests pass (37).
 
 ## 2026-11-28 · 0009 Results screen and leaderboard PP ignore No Fail again
 
@@ -102,10 +140,11 @@ Changelog go in patch numerical order, so 0001 will be first and 1000 will be la
 - Tests: `TestSceneManageCollectionFolders` +2 (bottom edge moves inside with sub-collections and beatmaps, top edge moves to top level,
   no line on its own parent).
 
-## 2026-11-28 · 0500 Old RandomV2 scores and replays load again
+## 2026-11-28 · 0500 Scores and replays with old mod acronyms load again
 
-- **0500** `ConfiguredModExtensions.ToMod`: acronym `RDV2` (RandomV2 before it became `V2`) resolves to `V2`, so old scores in realm
-  and old `.osr` imports get the real mod (with seed / settings) instead of `UnknownMod`, and their replays stay in sync.
+- **0500** `ConfiguredModExtensions.ToMod`: acronyms 0500 mods used before they were renamed resolve to the new ones
+  (DCY → DY, HST → SL, HFR → OE, RDV2 → V2, RSL → RS, SOT → SP). Old scores in realm and old `.osr` imports get the real mod
+  (with its settings) instead of `UnknownMod`, so their replays stay in sync.
 - Tests: full stack builds 0 warnings. No test run.
 
 ## 2026-11-28 · 0500 RandomV2 spacing previews
